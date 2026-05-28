@@ -1,0 +1,19 @@
+name: zh_native_channel_generator
+description: "Code generator for zh_native_channel."
+version: 0.0.1
+homepage:
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  build: ^4.0.6
+  glob: ^2.1.3
+  zh_native_channel: ^0.0.1
+
+dev_dependencies:
+  lints: ^6.0.0
+
+# dependency_overrides:
+#   zh_native_channel:
+#     path: ../zh_native_channel

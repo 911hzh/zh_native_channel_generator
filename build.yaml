@@ -1,0 +1,18 @@
+builders:
+  channel_register_builder:
+    import: "package:zh_native_channel_generator/src/builders/ChannelRegisterBuilder.dart"
+    builder_factories: ["channelRegisterBuilder"]
+    build_extensions:
+      "$lib$":
+        - "base/zHNativeChannel/ChannelGeneratedRegister.g.dart"
+        - "base/zHNativeChannel/ZHNativeChannelManager.g.dart"
+    defaults:
+      options:
+        scan_globs:
+          - lib/base/zHNativeChannel/msgs/**.dart
+          - lib/base/zHNativeChannel/handlers/**.dart
+        method_channel_name: ZHNativeChannel
+        basePath: lib/base/zHNativeChannel
+        register_path: ChannelGeneratedRegister.g.dart
+    auto_apply: dependents
+    build_to: source
