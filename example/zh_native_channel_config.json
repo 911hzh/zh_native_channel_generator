@@ -1,0 +1,40 @@
+{
+  "dart": {
+    "defaultOutputDirectory": "lib/base/zHNativeChannel",
+    "messageScanPath": [
+      "lib/base/zHNativeChannel/msgs"
+    ],
+    "handlerScanPath": [
+      "lib/base/zHNativeChannel/handlers"
+    ],
+    "generatedChannelRegisterOutputPath": "lib/base/zHNativeChannel/ChannelGeneratedRegister.g.dart"
+  },
+  "platforms": {
+    "ios": {
+      "defaultOutputDirectory": "ios/Runner/zHNativeChannel",
+      "scanHandlerPath": [
+        "ios/Runner/zHNativeChannel/handler_ios"
+      ],
+      "msgsOutputPath": "ios/Runner/zHNativeChannel/msgs",
+      "generatedChannelRegistrationsOutputPath": "ios/Runner/zHNativeChannel"
+    },
+    "android": {
+      "defaultOutputDirectory": "android/app/src/main/kotlin/com/example/zh_native_channel_generator_example/zHNativeChannel",
+      "scanHandlerPath": [
+        "android/app/src/main/kotlin/com/example/zh_native_channel_generator_example/zHNativeChannel/handlers"
+      ],
+      "msgsOutputPath": "android/app/src/main/kotlin/com/example/zh_native_channel_generator_example/zHNativeChannel/msgs",
+      "generatedChannelRegistrationsOutputPath": "android/app/src/main/kotlin/com/example/zh_native_channel_generator_example/zHNativeChannel",
+      "packageName": "com.example.zh_native_channel_generator_example.zHNativeChannel"
+    },
+    "web": {
+      "defaultOutputDirectory": "web/zHNativeChannel",
+      "scanHandlerPath": [
+        "web/zHNativeChannel/handlers"
+      ],
+      "msgsOutputPath": "web/zHNativeChannel/msgs",
+      "generatedChannelRegistrationsOutputPath": "web/zHNativeChannel",
+      "globalName": "ZHNativeChannel"
+    }
+  }
+}

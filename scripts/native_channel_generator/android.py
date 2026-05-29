@@ -18,14 +18,16 @@ def generate_android(
     config: AndroidGeneratorConfig,
     messages: list[MessageClass],
 ) -> list[HandlerClass]:
-    handlers = _scan_android_handlers(config.handler_scan_path)
+    """生成 Android 消息类型和注册胶水代码。"""
+
+    handlers = _scan_android_handlers(config.handler_scan_paths)
     _reset_android_output_root(
         config.output_root,
+        config.generated_messages_output_path,
         config.generated_registrations_output_path,
     )
-    _write_android_runtime_files(config.output_root, config)
     _write_android_messages(
-        config.output_root,
+        config.generated_messages_output_path,
         config.package_name,
         messages,
     )
@@ -41,8 +43,11 @@ def generate_android(
 
 def _reset_android_output_root(
     output_root: Path,
+    generated_messages_output_path: Path,
     generated_registrations_output_path: Path,
 ) -> None:
+    """写入新产物前删除旧的 Android 生成文件。"""
+
     generated_files = [
         "ChannelBaseMsg.g.kt",
         "ChannelBaseHandler.g.kt",
@@ -70,21 +75,31 @@ def _reset_android_output_root(
     if generated_registrations_file.exists():
         generated_registrations_file.unlink()
 
-    generated_msgs = output_root / "msgs"
+    generated_msgs = generated_messages_output_path
     if generated_msgs.exists():
         shutil.rmtree(generated_msgs)
     generated_msgs.mkdir(parents=True, exist_ok=True)
 
-def _scan_android_handlers(scan_path: Path) -> list[HandlerClass]:
-    if not scan_path.exists():
-        scan_path.mkdir(parents=True, exist_ok=True)
+def _scan_android_handlers(scan_paths: list[Path]) -> list[HandlerClass]:
+    """扫描 Kotlin handler 文件中的 PlatformChannelHandler 注解。"""
 
     handlers: list[HandlerClass] = []
-    for kotlin_file in sorted(scan_path.rglob("*.kt")):
-        handlers.extend(_parse_android_handler_file(kotlin_file))
+    seen_files: set[Path] = set()
+    for scan_path in scan_paths:
+        if not scan_path.exists():
+            scan_path.mkdir(parents=True, exist_ok=True)
+
+        for kotlin_file in sorted(scan_path.rglob("*.kt")):
+            resolved_kotlin_file = kotlin_file.resolve()
+            if resolved_kotlin_file in seen_files:
+                continue
+            seen_files.add(resolved_kotlin_file)
+            handlers.extend(_parse_android_handler_file(kotlin_file))
     return sorted(handlers, key=lambda item: item.channel_name)
 
 def _parse_android_handler_file(kotlin_file: Path) -> list[HandlerClass]:
+    """解析单个 Kotlin 文件，并为每个 handler 绑定 package 名称。"""
+
     handlers = _parse_platform_handler_file(kotlin_file)
     if not handlers:
         return handlers
@@ -112,44 +127,16 @@ def _parse_android_handler_file(kotlin_file: Path) -> list[HandlerClass]:
         for handler in handlers
     ]
 
-def _write_android_runtime_files(
-    output_root: Path,
-    config: AndroidGeneratorConfig,
-) -> None:
-    package_name = config.package_name
-    _write_file(
-        output_root / "ChannelMsgException.g.kt",
-        _android_platform_channel_msg_exception(package_name),
-    )
-    _write_file(
-        output_root / "ChannelBaseMsg.g.kt",
-        _android_platform_channel_base_msg(package_name),
-    )
-    _write_file(
-        output_root / "ChannelBaseHandler.g.kt",
-        _android_platform_channel_base_handler(package_name),
-    )
-    _write_file(
-        output_root / "ChannelBaseMsgRegister.g.kt",
-        _android_channel_base_msg_register(package_name),
-    )
-    _write_file(
-        output_root / "ChannelHandlerRegister.g.kt",
-        _android_channel_handler_register(package_name),
-    )
-    _write_file(
-        output_root / "MethodChannelMsgManager.g.kt",
-        _android_method_channel_msg_manager(package_name, config.method_channel_name),
-    )
-
 def _write_android_messages(
-    output_root: Path,
+    output_path: Path,
     package_name: str,
     messages: list[MessageClass],
 ) -> None:
+    """将生成的 Kotlin 消息类写入配置指定目录。"""
+
     for message in messages:
         _write_file(
-            output_root / "msgs" / f"{message.class_name}.g.kt",
+            output_path / f"{message.class_name}.g.kt",
             _android_message_kotlin(package_name, message),
         )
 
@@ -160,7 +147,16 @@ def _write_android_generated_registrations(
     messages: list[MessageClass],
     handlers: list[HandlerClass],
 ) -> None:
+    """写入用于连接消息和 handler 的 Kotlin 注册文件。"""
+
     lines = _android_header(package_name)
+    lines.extend(
+        [
+            "import com.example.zh_native_channel.ChannelBaseMsgRegister",
+            "import com.example.zh_native_channel.ChannelHandlerRegister",
+            "import com.example.zh_native_channel.MethodChannelMsgManager",
+        ]
+    )
     for message in messages:
         lines.append(f"import {package_name}.msgs.{message.class_name}")
     for handler in handlers:
@@ -176,6 +172,11 @@ def _write_android_generated_registrations(
         [
             "",
             "object GeneratedChannelRegistrations {",
+            "    fun registerAll() {",
+            "        MethodChannelMsgManager.registerMessages(::registerMessages)",
+            "        MethodChannelMsgManager.registerHandlers(::registerHandlers)",
+            "    }",
+            "",
             "    fun registerMessages(register: ChannelBaseMsgRegister) {",
         ]
     )
@@ -193,7 +194,7 @@ def _write_android_generated_registrations(
                 f'        register.registerChannel("{handler.channel_name}", {handler.class_name}())'
             )
     else:
-        lines.append("        // Register handwritten Android handlers here.")
+        lines.append("        // 在这里注册手写的 Android handler。")
 
     lines.extend(["    }", "}"])
     _write_file(
@@ -206,6 +207,8 @@ def _android_handler_import(
     output_root: Path,
     handler: HandlerClass,
 ) -> str | None:
+    """当 handler 位于注册文件 package 外时生成 import。"""
+
     if handler.package_name is not None:
         if handler.package_name == package_name:
             return None
@@ -225,181 +228,22 @@ def _android_handler_import(
     return f"import {package_name}.{package_suffix}.{handler.class_name}"
 
 def _android_header(package_name: str) -> list[str]:
+    """返回生成 Kotlin 文件的头部和 package 声明。"""
+
     return [
-        "// GENERATED CODE - DO NOT MODIFY BY HAND",
-        "// Generated by zh_native_channel_generator/scripts/generate_native_channel.py",
+        "// 自动生成代码，请勿手动修改",
+        "// 由 zh_native_channel_generator/scripts/generate_native_channel.py 生成",
         "",
         f"package {package_name}",
     ]
 
-def _android_platform_channel_msg_exception(package_name: str) -> str:
-    lines = _android_header(package_name) + [
-        "",
-        "class ChannelMsgException(message: String) : Exception(message)",
-    ]
-    return "\n".join(lines) + "\n"
-
-def _android_platform_channel_base_msg(package_name: str) -> str:
-    lines = _android_header(package_name) + [
-        "",
-        "interface ChannelBaseMsg {",
-        "    val channelName: String",
-        "    fun toMap(): Map<String, Any?>",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
-def _android_platform_channel_base_handler(package_name: str) -> str:
-    lines = _android_header(package_name) + [
-        "",
-        "interface ChannelBaseHandler {",
-        "    fun handle(message: ChannelBaseMsg): ChannelBaseMsg",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
-def _android_channel_base_msg_register(package_name: str) -> str:
-    lines = _android_header(package_name) + [
-        "",
-        "class ChannelBaseMsgRegister {",
-        "    private val channelMap = mutableMapOf<String, (Map<String, Any?>) -> ChannelBaseMsg>()",
-        "",
-        "    init {",
-        "        GeneratedChannelRegistrations.registerMessages(this)",
-        "    }",
-        "",
-        "    fun registerChannel(channelName: String, factory: (Map<String, Any?>) -> ChannelBaseMsg) {",
-        "        channelMap[channelName] = factory",
-        "    }",
-        "",
-        "    fun getChannel(channelName: String, params: Map<String, Any?>): ChannelBaseMsg {",
-        "        val factory = channelMap[channelName]",
-        "            ?: throw ChannelMsgException(\"Missing message factory: $channelName\")",
-        "        return factory(params)",
-        "    }",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
-def _android_channel_handler_register(package_name: str) -> str:
-    lines = _android_header(package_name) + [
-        "",
-        "class ChannelHandlerRegister {",
-        "    private val container = mutableMapOf<String, ChannelBaseHandler>()",
-        "",
-        "    init {",
-        "        GeneratedChannelRegistrations.registerHandlers(this)",
-        "    }",
-        "",
-        "    fun registerChannel(channelName: String, handler: ChannelBaseHandler) {",
-        "        container[channelName] = handler",
-        "    }",
-        "",
-        "    fun getChannelHandler(channelName: String): ChannelBaseHandler {",
-        "        return container[channelName]",
-        "            ?: throw ChannelMsgException(\"Missing handler: $channelName\")",
-        "    }",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
-def _android_method_channel_msg_manager(
-    package_name: str,
-    method_channel_name: str,
-) -> str:
-    escaped_channel_name = _escape_kotlin_string(method_channel_name)
-    lines = _android_header(package_name) + [
-        "",
-        "import io.flutter.plugin.common.BinaryMessenger",
-        "import io.flutter.plugin.common.MethodCall",
-        "import io.flutter.plugin.common.MethodChannel",
-        "",
-        "object MethodChannelMsgManager : MethodChannel.MethodCallHandler {",
-        "    private val msgRegister: ChannelBaseMsgRegister = ChannelBaseMsgRegister()",
-        "    private val handlerRegister: ChannelHandlerRegister = ChannelHandlerRegister()",
-        "    private var methodChannel: MethodChannel? = null",
-        "",
-        "    fun configureBinaryMessenger(",
-        "        binaryMessenger: BinaryMessenger,",
-        f'        channelName: String = "{escaped_channel_name}"',
-        "    ) {",
-        "        dispose()",
-        "        methodChannel = MethodChannel(binaryMessenger, channelName).also { channel ->",
-        "            channel.setMethodCallHandler(this)",
-        "        }",
-        "    }",
-        "",
-        "    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {",
-        "        try {",
-        "            result.success(handle(call))",
-        "        } catch (error: Throwable) {",
-        "            result.error(\"channel-error\", error.message, null)",
-        "        }",
-        "    }",
-        "",
-        "    fun dispose() {",
-        "        methodChannel?.setMethodCallHandler(null)",
-        "        methodChannel = null",
-        "    }",
-        "",
-        "    fun invoke(message: ChannelBaseMsg, callback: (ChannelBaseMsg?, Throwable?) -> Unit) {",
-        "        val channel = methodChannel",
-        "        if (channel == null) {",
-        "            callback(null, ChannelMsgException(\"MethodChannel is not configured.\"))",
-        "            return",
-        "        }",
-        "",
-        "        val methodName = message.channelName",
-        "        val params = message.toMap().toMutableMap()",
-        "        params[\"@:\"] = methodName",
-        "        channel.invokeMethod(methodName, params, object : MethodChannel.Result {",
-        "            override fun success(result: Any?) {",
-        "                try {",
-        "                    val resultMap = toStringAnyMap(result)",
-        "                    callback(msgRegister.getChannel(methodName, resultMap), null)",
-        "                } catch (error: Throwable) {",
-        "                    callback(null, error)",
-        "                }",
-        "            }",
-        "",
-        "            override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {",
-        "                callback(null, ChannelMsgException(errorMessage ?: errorCode))",
-        "            }",
-        "",
-        "            override fun notImplemented() {",
-        "                callback(null, ChannelMsgException(\"Method $methodName is not implemented.\"))",
-        "            }",
-        "        })",
-        "    }",
-        "",
-        "    private fun handle(call: MethodCall): Map<String, Any?> {",
-        "        val params = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()",
-        "        val typedParams = params.entries.associate { it.key.toString() to it.value }",
-        "        val channelName = typedParams[\"@:\"] as? String ?: call.method",
-        "        val message = msgRegister.getChannel(channelName, typedParams)",
-        "        val handler = handlerRegister.getChannelHandler(channelName)",
-        "        val response = handler.handle(message)",
-        "        return response.toMap() + mapOf(\"@:\" to channelName)",
-        "    }",
-        "",
-        "    private fun toStringAnyMap(value: Any?): Map<String, Any?> {",
-        "        val map = value as? Map<*, *>",
-        "            ?: throw ChannelMsgException(\"Method result must be a map.\")",
-        "        return map.entries.associate { entry ->",
-        "            val key = entry.key as? String",
-        "                ?: throw ChannelMsgException(\"Method result map key must be a String.\")",
-        "            key to entry.value",
-        "        }",
-        "    }",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
 def _android_message_kotlin(package_name: str, message: MessageClass) -> str:
+    """为单个 Dart 消息渲染 Kotlin ChannelBaseMsg 实现。"""
+
     lines = _android_header(f"{package_name}.msgs") + [
         "",
-        f"import {package_name}.ChannelBaseMsg",
-        f"import {package_name}.ChannelMsgException",
+        "import com.example.zh_native_channel.ChannelBaseMsg",
+        "import com.example.zh_native_channel.ChannelMsgException",
         "",
         f"data class {message.class_name}(",
     ]
@@ -441,6 +285,8 @@ def _android_message_kotlin(package_name: str, message: MessageClass) -> str:
     return "\n".join(lines) + "\n"
 
 def _kotlin_type(field: DartField) -> str:
+    """将支持的 Dart 字段类型映射为 Kotlin 类型。"""
+
     type_map = {
         "String": "String",
         "int": "Int",
@@ -456,6 +302,8 @@ def _kotlin_type(field: DartField) -> str:
     return f"{kotlin_type}?" if field.nullable else kotlin_type
 
 def _kotlin_value_reader(field: DartField) -> str:
+    """渲染从 map 读取并校验单个字段的 Kotlin 代码。"""
+
     value = f'map["{field.name}"]'
     if field.nullable:
         if field.dart_type == "int":
@@ -474,4 +322,6 @@ def _kotlin_value_reader(field: DartField) -> str:
     return f"{value} as? {_kotlin_type(field)} ?: throw {error}"
 
 def _escape_kotlin_string(value: str) -> str:
+    """转义生成 Kotlin 源码中的字符串字面量。"""
+
     return value.replace("\\", "\\\\").replace('"', '\\"')

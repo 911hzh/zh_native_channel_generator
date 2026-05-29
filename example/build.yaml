@@ -1,0 +1,11 @@
+targets:
+  $default:
+    builders:
+      zh_native_channel_generator|channel_register_builder:
+        enabled: true
+        options:
+          scan_globs:
+            - lib/base/zHNativeChannel/msgs/**.dart
+            - lib/base/zHNativeChannel/handlers/**.dart
+          basePath: lib/base/zHNativeChannel
+          register_path: ChannelGeneratedRegister.g.dart

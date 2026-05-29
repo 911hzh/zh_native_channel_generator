@@ -13,19 +13,28 @@ from .common import (
     _write_file,
 )
 
+DEFAULT_METHOD_CHANNEL_NAME = "zh_native_channel"
+
 
 def generate_web(
     config: WebGeneratorConfig,
     messages: list[MessageClass],
 ) -> list[HandlerClass]:
-    handlers = _scan_web_handlers(config.handler_scan_path)
-    _reset_web_output_root(config.output_root, config.generated_registrations_output_path)
+    """生成 Web 运行时文件、消息类型和注册代码。"""
+
+    handlers = _scan_web_handlers(config.handler_scan_paths)
+    _reset_web_output_root(
+        config.output_root,
+        config.generated_messages_output_path,
+        config.generated_registrations_output_path,
+    )
     _write_web_runtime_files(config.output_root, config)
-    _write_web_messages(config.output_root, messages)
+    _write_web_messages(config.generated_messages_output_path, messages)
     _write_web_generated_registrations(
         config.generated_registrations_output_path,
         config.output_root,
-        config.handler_scan_path,
+        config.generated_messages_output_path,
+        config.handler_scan_paths,
         messages,
         handlers,
     )
@@ -34,8 +43,11 @@ def generate_web(
 
 def _reset_web_output_root(
     output_root: Path,
+    generated_messages_output_path: Path,
     generated_registrations_output_path: Path,
 ) -> None:
+    """写入新产物前删除旧的 Web 生成文件。"""
+
     generated_files = [
         "ChannelBaseMsg.ts",
         "ChannelBaseHandler.ts",
@@ -57,21 +69,31 @@ def _reset_web_output_root(
     if generated_registrations_file.exists():
         generated_registrations_file.unlink()
 
-    generated_msgs = output_root / "msgs"
+    generated_msgs = generated_messages_output_path
     if generated_msgs.exists():
         shutil.rmtree(generated_msgs)
     generated_msgs.mkdir(parents=True, exist_ok=True)
 
-def _scan_web_handlers(scan_path: Path) -> list[HandlerClass]:
-    if not scan_path.exists():
-        scan_path.mkdir(parents=True, exist_ok=True)
+def _scan_web_handlers(scan_paths: list[Path]) -> list[HandlerClass]:
+    """扫描 TypeScript 和 JavaScript 文件中的平台 handler 注解。"""
 
     handlers: list[HandlerClass] = []
-    for web_file in sorted([*scan_path.rglob("*.ts"), *scan_path.rglob("*.js")]):
-        handlers.extend(_parse_platform_handler_file(web_file))
+    seen_files: set[Path] = set()
+    for scan_path in scan_paths:
+        if not scan_path.exists():
+            scan_path.mkdir(parents=True, exist_ok=True)
+
+        for web_file in sorted([*scan_path.rglob("*.ts"), *scan_path.rglob("*.js")]):
+            resolved_web_file = web_file.resolve()
+            if resolved_web_file in seen_files:
+                continue
+            seen_files.add(resolved_web_file)
+            handlers.extend(_parse_platform_handler_file(web_file))
     return sorted(handlers, key=lambda item: item.channel_name)
 
 def _write_web_runtime_files(output_root: Path, config: WebGeneratorConfig) -> None:
+    """写入生成消息代码需要的 Web 共享运行时辅助文件。"""
+
     generated_registrations_import = _web_relative_import(
         output_root,
         config.generated_registrations_output_path / "GeneratedChannelRegistrations",
@@ -92,27 +114,32 @@ def _write_web_runtime_files(output_root: Path, config: WebGeneratorConfig) -> N
     )
     _write_file(
         output_root / "MethodChannelMsgManager.ts",
-        _web_method_channel_msg_manager(config.global_name, config.method_channel_name),
+        _web_method_channel_msg_manager(config.global_name),
     )
     _write_file(
         output_root / "index.ts",
         _web_index(output_root, config.generated_registrations_output_path),
     )
 
-def _write_web_messages(output_root: Path, messages: list[MessageClass]) -> None:
+def _write_web_messages(output_path: Path, messages: list[MessageClass]) -> None:
+    """将生成的 TypeScript 消息类写入配置指定目录。"""
+
     for message in messages:
         _write_file(
-            output_root / "msgs" / f"{message.class_name}.ts",
+            output_path / f"{message.class_name}.ts",
             _web_message_typescript(message),
         )
 
 def _write_web_generated_registrations(
     output_path: Path,
     output_root: Path,
-    handler_scan_path: Path,
+    generated_messages_output_path: Path,
+    handler_scan_paths: list[Path],
     messages: list[MessageClass],
     handlers: list[HandlerClass],
 ) -> None:
+    """写入用于连接消息和 handler 的 TypeScript 注册文件。"""
+
     lines = _web_header() + [
         "import { ChannelBaseMsgRegister } from "
         f"'{_web_relative_import(output_path, output_root / 'ChannelBaseMsgRegister')}';",
@@ -123,13 +150,13 @@ def _write_web_generated_registrations(
     for message in messages:
         lines.append(
             f"import {{ {message.class_name} }} from "
-            f"'{_web_relative_import(output_path, output_root / 'msgs' / message.class_name)}';"
+            f"'{_web_relative_import(output_path, generated_messages_output_path / message.class_name)}';"
         )
     for handler in handlers:
         handler_import = _web_handler_import(
             output_path,
             output_root,
-            handler_scan_path,
+            handler_scan_paths,
             handler,
         )
         if handler_import is not None:
@@ -160,7 +187,7 @@ def _write_web_generated_registrations(
                 f"  register.registerChannel('{handler.channel_name}', new {handler.class_name}());"
             )
     else:
-        lines.append("  // Register handwritten Web handlers here.")
+        lines.append("  // 在这里注册手写的 Web handler。")
 
     lines.append("}")
     _write_file(
@@ -171,9 +198,11 @@ def _write_web_generated_registrations(
 def _web_handler_import(
     output_path: Path,
     output_root: Path,
-    handler_scan_path: Path,
+    handler_scan_paths: list[Path],
     handler: HandlerClass,
 ) -> str | None:
+    """为扫描到的 Web handler 文件生成相对 import。"""
+
     if handler.file_path is None:
         return None
     try:
@@ -183,19 +212,25 @@ def _web_handler_import(
             output_root / relative_path.with_suffix(""),
         )
     except ValueError:
-        try:
-            relative_path = handler.file_path.resolve().relative_to(
-                handler_scan_path.resolve()
+        for handler_scan_path in handler_scan_paths:
+            try:
+                relative_path = handler.file_path.resolve().relative_to(
+                    handler_scan_path.resolve()
+                )
+            except ValueError:
+                continue
+            import_path = _web_relative_import(
+                output_path,
+                handler_scan_path / relative_path.with_suffix(""),
             )
-        except ValueError:
+            break
+        else:
             return None
-        import_path = _web_relative_import(
-            output_path,
-            handler_scan_path / relative_path.with_suffix(""),
-        )
     return f"import {{ {handler.class_name} }} from '{import_path}';"
 
 def _web_relative_import(from_dir: Path, target_without_suffix: Path) -> str:
+    """返回不带文件后缀的 TypeScript 相对 import 路径。"""
+
     relative_path = Path(
         os.path.relpath(target_without_suffix, from_dir)
     ).as_posix()
@@ -204,13 +239,17 @@ def _web_relative_import(from_dir: Path, target_without_suffix: Path) -> str:
     return relative_path
 
 def _web_header() -> list[str]:
+    """返回生成 TypeScript 文件的标准头部。"""
+
     return [
-        "// GENERATED CODE - DO NOT MODIFY BY HAND",
-        "// Generated by zh_native_channel_generator/scripts/generate_native_channel.py",
+        "// 自动生成代码，请勿手动修改",
+        "// 由 zh_native_channel_generator/scripts/generate_native_channel.py 生成",
         "",
     ]
 
 def _web_platform_channel_msg_error() -> str:
+    """渲染生成的 ChannelMsgError TypeScript 源码。"""
+
     lines = _web_header() + [
         "export class ChannelMsgError extends Error {",
         "  constructor(message: string) {",
@@ -222,6 +261,8 @@ def _web_platform_channel_msg_error() -> str:
     return "\n".join(lines) + "\n"
 
 def _web_platform_channel_base_msg() -> str:
+    """渲染生成的 ChannelBaseMsg TypeScript 源码。"""
+
     lines = _web_header() + [
         "export type ChannelMap = Record<string, unknown>;",
         "",
@@ -233,6 +274,8 @@ def _web_platform_channel_base_msg() -> str:
     return "\n".join(lines) + "\n"
 
 def _web_platform_channel_base_handler() -> str:
+    """渲染生成的 ChannelBaseHandler TypeScript 源码。"""
+
     lines = _web_header() + [
         "import { ChannelBaseMsg } from './ChannelBaseMsg';",
         "",
@@ -243,6 +286,8 @@ def _web_platform_channel_base_handler() -> str:
     return "\n".join(lines) + "\n"
 
 def _web_channel_base_msg_register(generated_registrations_import: str) -> str:
+    """渲染 Web 消息工厂注册表 TypeScript 源码。"""
+
     lines = _web_header() + [
         "import { ChannelBaseMsg, ChannelMap } from './ChannelBaseMsg';",
         "import { ChannelMsgError } from './ChannelMsgError';",
@@ -274,6 +319,8 @@ def _web_channel_base_msg_register(generated_registrations_import: str) -> str:
     return "\n".join(lines) + "\n"
 
 def _web_channel_handler_register(generated_registrations_import: str) -> str:
+    """渲染 Web handler 注册表 TypeScript 源码。"""
+
     lines = _web_header() + [
         "import { ChannelBaseHandler } from './ChannelBaseHandler';",
         "import { ChannelMsgError } from './ChannelMsgError';",
@@ -302,9 +349,11 @@ def _web_channel_handler_register(generated_registrations_import: str) -> str:
     ]
     return "\n".join(lines) + "\n"
 
-def _web_method_channel_msg_manager(global_name: str, method_channel_name: str) -> str:
+def _web_method_channel_msg_manager(global_name: str) -> str:
+    """渲染面向浏览器的 MethodChannelMsgManager TypeScript 源码。"""
+
     escaped_global_name = _escape_typescript_string(global_name)
-    escaped_method_channel_name = _escape_typescript_string(method_channel_name)
+    escaped_method_channel_name = _escape_typescript_string(DEFAULT_METHOD_CHANNEL_NAME)
     lines = _web_header() + [
         "import { ChannelBaseMsgRegister } from './ChannelBaseMsgRegister';",
         "import { ChannelHandlerRegister } from './ChannelHandlerRegister';",
@@ -345,6 +394,8 @@ def _web_method_channel_msg_manager(global_name: str, method_channel_name: str) 
     return "\n".join(lines) + "\n"
 
 def _web_message_typescript(message: MessageClass) -> str:
+    """为单个 Dart 消息渲染 TypeScript ChannelBaseMsg 实现。"""
+
     lines = _web_header() + [
         "import { ChannelBaseMsg, ChannelMap } from '../ChannelBaseMsg';",
         "import { ChannelMsgError } from '../ChannelMsgError';",
@@ -378,6 +429,8 @@ def _web_message_typescript(message: MessageClass) -> str:
     return "\n".join(lines) + "\n"
 
 def _web_index(output_root: Path, generated_registrations_output_path: Path) -> str:
+    """渲染生成的 Web barrel 导出文件。"""
+
     generated_registrations_import = _web_relative_import(
         output_root,
         generated_registrations_output_path / "GeneratedChannelRegistrations",
@@ -394,6 +447,8 @@ def _web_index(output_root: Path, generated_registrations_output_path: Path) -> 
     return "\n".join(lines) + "\n"
 
 def _typescript_type(field: DartField) -> str:
+    """将支持的 Dart 字段类型映射为 TypeScript 类型。"""
+
     type_map = {
         "String": "string",
         "int": "number",
@@ -409,6 +464,8 @@ def _typescript_type(field: DartField) -> str:
     return f"{typescript_type} | null" if field.nullable else typescript_type
 
 def _typescript_value_reader(field: DartField) -> str:
+    """渲染从 channel map 读取单个字段的 TypeScript 代码。"""
+
     value = f"map['{field.name}']"
     if field.nullable:
         return f"{value} == null ? null : ({value} as {_typescript_type(field).replace(' | null', '')})"
@@ -420,4 +477,6 @@ def _typescript_value_reader(field: DartField) -> str:
     )
 
 def _escape_typescript_string(value: str) -> str:
+    """转义生成 TypeScript 源码中的字符串字面量。"""
+
     return value.replace("\\", "\\\\").replace("'", "\\'")

@@ -3,29 +3,29 @@
 import 'package:build/build.dart';
 import 'package:glob/glob.dart';
 
+/// 创建用于写入 channel 注册代码的 build_runner Builder。
 Builder channelRegisterBuilder(BuilderOptions options) =>
     ChannelRegisterBuilder(options);
 
+/// 扫描带注解的 Dart 类，并生成 channel 注册入口。
 class ChannelRegisterBuilder implements Builder {
   final List<String> scanGlobs;
-  final String methodChannelName;
   final String basePath;
   final String registerPath;
 
+  /// 读取用于控制扫描范围和输出位置的 Builder 配置。
   ChannelRegisterBuilder(BuilderOptions options)
     : scanGlobs = _readScanGlobs(options),
-      methodChannelName = _readMethodChannelName(options),
       basePath = _readBasePath(options),
       registerPath = _readRegisterPath(options);
 
+  /// 声明从 package lib 根节点生成的单个输出文件。
   @override
   Map<String, List<String>> get buildExtensions => {
-    r'$lib$': [
-      _buildExtensionPath(_registerOutputPath()),
-      _buildExtensionPath(_managerOutputPath()),
-    ],
+    r'$lib$': [_buildExtensionPath(_registerOutputPath())],
   };
 
+  /// 查找所有消息和 handler 注解，并写入注册代码。
   @override
   Future<void> build(BuildStep buildStep) async {
     final messages = <_ChannelEntry>[];
@@ -62,21 +62,14 @@ class ChannelRegisterBuilder implements Builder {
       buildStep.inputId.package,
       _registerOutputPath(),
     );
-    final managerOutput = AssetId(
-      buildStep.inputId.package,
-      _managerOutputPath(),
-    );
 
     await buildStep.writeAsString(
       registerOutput,
       _buildRegisterOutput(messages, handlers),
     );
-    await buildStep.writeAsString(
-      managerOutput,
-      _buildManagerOutput(buildStep.inputId.package),
-    );
   }
 
+  /// 从源码文本中提取 channel 注解，不做 import 解析。
   Iterable<_ChannelEntry> _findAnnotatedClasses(
     String source,
     String importUri,
@@ -108,12 +101,13 @@ class ChannelRegisterBuilder implements Builder {
     }
   }
 
+  /// 构建用于注册消息和 handler 的 Dart 源码。
   String _buildRegisterOutput(
     List<_ChannelEntry> messages,
     List<_ChannelEntry> handlers,
   ) {
     final buffer = StringBuffer()
-      ..writeln('// GENERATED CODE - DO NOT MODIFY BY HAND')
+      ..writeln('// 自动生成代码，请勿手动修改')
       ..writeln()
       ..writeln(
         '// ************************************************************************',
@@ -152,10 +146,8 @@ class ChannelRegisterBuilder implements Builder {
       ..writeln();
 
     buffer
-      ..writeln(
-        'ZHNativeChannel createGeneratedChannel(String methodChannelName) {',
-      )
-      ..writeln('  final channel = ZHNativeChannel(methodChannelName);')
+      ..writeln('ZHNativeChannel createGeneratedChannel() {')
+      ..writeln('  final channel = ZHNativeChannel.instance;')
       ..writeln('  initializeGeneratedChannels(channel);')
       ..writeln('  return channel;')
       ..writeln('}')
@@ -195,47 +187,17 @@ class ChannelRegisterBuilder implements Builder {
     return buffer.toString();
   }
 
-  String _buildManagerOutput(String packageName) {
-    final escapedMethodChannelName = _escapeDartString(methodChannelName);
-    return '''
-// GENERATED CODE - DO NOT MODIFY BY HAND
-
-// ************************************************************************
-// ChannelRegisterBuilder
-// ************************************************************************
-
-import 'package:zh_native_channel/zh_native_channel.dart';
-
-class ZHNativeChannelManager {
-  static final ZHNativeChannelManager _instance = ZHNativeChannelManager._();
-
-  ZHNativeChannelManager._() {
-    channel = ZHNativeChannel('$escapedMethodChannelName');
-  }
-
-  Future<ChannelBaseMsg> invoke(ChannelBaseMsg msg) async {
-    return channel.invokeMethod(msg);
-  }
-
-  static ZHNativeChannelManager get instance => _instance;
-
-  late final ZHNativeChannel channel;
-}
-''';
-  }
-
+  /// 将配置的注册文件路径解析为 package asset 路径。
   String _registerOutputPath() {
     return _resolveGeneratedPath(registerPath);
   }
 
-  String _managerOutputPath() {
-    return _resolveGeneratedPath('ZHNativeChannelManager.g.dart');
-  }
-
+  /// 将 package asset 路径转换为 build_extensions 需要的相对路径。
   String _buildExtensionPath(String assetPath) {
     return _stripLibPrefix(assetPath);
   }
 
+  /// 将相对生成路径解析到配置的 lib 基础目录下。
   String _resolveGeneratedPath(String path) {
     final normalizedPath = _normalizePath(path);
     if (normalizedPath == 'lib' || normalizedPath.startsWith('lib/')) {
@@ -249,11 +211,13 @@ class ZHNativeChannelManager {
     return _ensureLibPrefix('$normalizedBasePath/$normalizedPath');
   }
 
+  /// 将 lib asset 路径转换为 package import URI。
   String _packageImportFor(String packageName, String assetPath) {
     final pathInLib = assetPath.substring('lib/'.length);
     return 'package:$packageName/$pathInLib';
   }
 
+  /// 按 channel 名和类名排序，保证生成内容稳定。
   int _compareEntries(_ChannelEntry left, _ChannelEntry right) {
     final channelCompare = left.channelName.compareTo(right.channelName);
     if (channelCompare != 0) {
@@ -263,6 +227,7 @@ class ZHNativeChannelManager {
   }
 }
 
+/// 读取 Builder 需要扫描的 channel 注解文件 glob。
 List<String> _readScanGlobs(BuilderOptions options) {
   final rawGlobs = options.config['scan_globs'];
   if (rawGlobs is List && rawGlobs.every((item) => item is String)) {
@@ -271,14 +236,7 @@ List<String> _readScanGlobs(BuilderOptions options) {
   return const ['lib/**.dart'];
 }
 
-String _readMethodChannelName(BuilderOptions options) {
-  final rawName = options.config['method_channel_name'];
-  if (rawName is String && rawName.trim().isNotEmpty) {
-    return rawName.trim();
-  }
-  return 'zh_native_channel';
-}
-
+/// 读取生成 Dart 文件使用的基础输出目录。
 String _readBasePath(BuilderOptions options) {
   final rawBasePath = options.config['basePath'] ?? options.config['base_path'];
   if (rawBasePath is String && rawBasePath.trim().isNotEmpty) {
@@ -287,6 +245,7 @@ String _readBasePath(BuilderOptions options) {
   return 'lib/base/zHNativeChannel';
 }
 
+/// 读取生成注册文件的文件名或路径。
 String _readRegisterPath(BuilderOptions options) {
   final rawRegisterPath = options.config['register_path'];
   if (rawRegisterPath is String && rawRegisterPath.trim().isNotEmpty) {
@@ -295,10 +254,7 @@ String _readRegisterPath(BuilderOptions options) {
   return 'ChannelGeneratedRegister.g.dart';
 }
 
-String _escapeDartString(String value) {
-  return value.replaceAll(r'\', r'\\').replaceAll("'", r"\'");
-}
-
+/// 将用户配置路径规范化为使用斜杠分隔的相对路径。
 String _normalizePath(String value) {
   return value
       .trim()
@@ -307,6 +263,7 @@ String _normalizePath(String value) {
       .replaceAll(RegExp(r'^/+|/+$'), '');
 }
 
+/// 确保 asset 路径以 `lib` 为根目录。
 String _ensureLibPrefix(String value) {
   final normalized = _normalizePath(value);
   if (normalized == 'lib' || normalized.startsWith('lib/')) {
@@ -315,6 +272,7 @@ String _ensureLibPrefix(String value) {
   return 'lib/$normalized';
 }
 
+/// 移除 `lib/` 前缀，用于声明 build extension。
 String _stripLibPrefix(String value) {
   final normalized = _normalizePath(value);
   if (normalized == 'lib') {
@@ -326,12 +284,14 @@ String _stripLibPrefix(String value) {
   return normalized;
 }
 
+/// 描述一个需要写入注册代码的注解类。
 class _ChannelEntry {
   final String annotationName;
   final String channelName;
   final String className;
   final String importUri;
 
+  /// 创建用于生成输出的不可变注册条目。
   const _ChannelEntry({
     required this.annotationName,
     required this.channelName,

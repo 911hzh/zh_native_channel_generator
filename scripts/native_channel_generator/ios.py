@@ -16,10 +16,15 @@ from .common import (
 
 
 def generate_ios(config: IOSGeneratorConfig, messages: list[MessageClass]) -> list[HandlerClass]:
-    handlers = _scan_ios_handlers(config.handler_scan_path)
-    _reset_output_root(config.output_root, config.generated_registrations_output_path)
-    _write_runtime_files(config.output_root, config.method_channel_name)
-    _write_messages(config.output_root, messages)
+    """生成 iOS 消息类型、注册代码和 Xcode 源文件条目。"""
+
+    handlers = _scan_ios_handlers(config.handler_scan_paths)
+    _reset_output_root(
+        config.output_root,
+        config.generated_messages_output_path,
+        config.generated_registrations_output_path,
+    )
+    _write_messages(config.generated_messages_output_path, messages)
     _write_generated_registrations(
         config.generated_registrations_output_path,
         messages,
@@ -27,6 +32,7 @@ def generate_ios(config: IOSGeneratorConfig, messages: list[MessageClass]) -> li
     )
     _sync_xcode_sources(
         config.output_root,
+        config.generated_messages_output_path,
         config.generated_registrations_output_path,
         handlers,
         config.xcode_project_path,
@@ -36,8 +42,11 @@ def generate_ios(config: IOSGeneratorConfig, messages: list[MessageClass]) -> li
 
 def _reset_output_root(
     output_root: Path,
+    generated_messages_output_path: Path,
     generated_registrations_output_path: Path,
 ) -> None:
+    """写入新产物前删除旧的 iOS 生成文件。"""
+
     generated_files = [
         "ChannelBaseMsg.g.swift",
         "ChannelBaseHandler.g.swift",
@@ -63,23 +72,32 @@ def _reset_output_root(
     if generated_registrations_file.exists():
         generated_registrations_file.unlink()
 
-    for generated_dir in ("msgs", "handlers"):
-        path = output_root / generated_dir
-        if path.exists():
-            shutil.rmtree(path)
+    for generated_dir in (generated_messages_output_path, output_root / "handlers"):
+        if generated_dir.exists():
+            shutil.rmtree(generated_dir)
 
-    (output_root / "msgs").mkdir(parents=True, exist_ok=True)
+    generated_messages_output_path.mkdir(parents=True, exist_ok=True)
 
-def _scan_ios_handlers(scan_path: Path) -> list[HandlerClass]:
-    if not scan_path.exists():
-        scan_path.mkdir(parents=True, exist_ok=True)
+def _scan_ios_handlers(scan_paths: list[Path]) -> list[HandlerClass]:
+    """扫描 Swift 文件中的 PlatformChannelHandler 注解。"""
 
     handlers: list[HandlerClass] = []
-    for swift_file in sorted(scan_path.rglob("*.swift")):
-        handlers.extend(_parse_ios_handler_file(swift_file))
+    seen_files: set[Path] = set()
+    for scan_path in scan_paths:
+        if not scan_path.exists():
+            scan_path.mkdir(parents=True, exist_ok=True)
+
+        for swift_file in sorted(scan_path.rglob("*.swift")):
+            resolved_swift_file = swift_file.resolve()
+            if resolved_swift_file in seen_files:
+                continue
+            seen_files.add(resolved_swift_file)
+            handlers.extend(_parse_ios_handler_file(swift_file))
     return sorted(handlers, key=lambda item: item.channel_name)
 
 def _parse_ios_handler_file(swift_file: Path) -> list[HandlerClass]:
+    """解析单个 Swift 文件中的注解 handler 类或结构体声明。"""
+
     source = swift_file.read_text(encoding="utf-8")
     pattern = re.compile(
         r"//\s*PlatformChannelHandler(?:\(\s*(?:\"(?P<key>[^\"]+)\"|'(?P<single_key>[^']+)')?\s*\))?"
@@ -105,26 +123,12 @@ def _parse_ios_handler_file(swift_file: Path) -> list[HandlerClass]:
         )
     return handlers
 
-def _write_runtime_files(output_root: Path, method_channel_name: str) -> None:
-    _write_file(output_root / "ChannelBaseMsg.g.swift", _platform_channel_base_msg())
-    _write_file(output_root / "ChannelBaseHandler.g.swift", _platform_channel_base_handler())
-    _write_file(
-        output_root / "ChannelBaseMsgRegister.g.swift",
-        _channel_base_msg_register(),
-    )
-    _write_file(
-        output_root / "ChannelHandlerRegister.g.swift",
-        _channel_handler_register(),
-    )
-    _write_file(
-        output_root / "MethodChannelMsgManager.g.swift",
-        _method_channel_msg_manager(method_channel_name),
-    )
+def _write_messages(output_path: Path, messages: list[MessageClass]) -> None:
+    """将生成的 Swift 消息结构体写入配置指定目录。"""
 
-def _write_messages(output_root: Path, messages: list[MessageClass]) -> None:
     for message in messages:
         _write_file(
-            output_root / "msgs" / f"{message.swift_name}.g.swift",
+            output_path / f"{message.swift_name}.g.swift",
             _message_swift(message),
         )
 
@@ -133,10 +137,18 @@ def _write_generated_registrations(
     messages: list[MessageClass],
     handlers: list[HandlerClass],
 ) -> None:
+    """写入用于连接消息和 handler 的 Swift 注册文件。"""
+
     lines = _header() + [
         "import Foundation",
+        "import zh_native_channel",
         "",
         "enum GeneratedChannelRegistrations {",
+        "    static func registerAll() {",
+        "        MethodChannelMsgManager.shared.registerMessages(registerMessages)",
+        "        MethodChannelMsgManager.shared.registerHandlers(registerHandlers)",
+        "    }",
+        "",
         "    static func registerMessages(_ register: ChannelBaseMsgRegister) {",
     ]
 
@@ -160,7 +172,7 @@ def _write_generated_registrations(
                 f'        register.registerChannel("{handler.channel_name}", handler: {handler.class_name}())'
             )
     else:
-        lines.append("        // Register handwritten iOS handlers here.")
+        lines.append("        // 在这里注册手写的 iOS handler。")
 
     lines.extend(["    }", "}"])
     _write_file(
@@ -170,10 +182,13 @@ def _write_generated_registrations(
 
 def _sync_xcode_sources(
     output_root: Path,
+    generated_messages_output_path: Path,
     generated_registrations_output_path: Path,
     handlers: list[HandlerClass],
     xcode_project_path: Path | None,
 ) -> None:
+    """在可行时将生成文件和 handler 文件加入 Runner target。"""
+
     if xcode_project_path is None or not xcode_project_path.exists():
         return
 
@@ -185,6 +200,7 @@ def _sync_xcode_sources(
     swift_files = sorted(
         {
             *output_root.rglob("*.swift"),
+            *generated_messages_output_path.rglob("*.swift"),
             generated_registrations_output_path / "GeneratedChannelRegistrations.g.swift",
             *handler_files,
         }
@@ -243,6 +259,8 @@ def _xcode_source_addition(
     project_root: Path,
     swift_file: Path,
 ) -> dict[str, str] | None:
+    """为尚未加入工程的 Swift 文件构建 pbxproj 片段。"""
+
     file_name = swift_file.name
     if f"/* {file_name} in Sources */" in project_source:
         return None
@@ -272,6 +290,8 @@ def _xcode_source_addition(
     }
 
 def _find_runner_sources_build_phase_id(project_source: str) -> str:
+    """在 pbxproj 中查找 Runner target 的 Sources build phase id。"""
+
     native_targets = re.finditer(
         r"\n\t\t[0-9A-F]{24} /\* [^*]+ \*/ = \{"
         r"\n\t\t\tisa = PBXNativeTarget;"
@@ -308,208 +328,21 @@ def _find_runner_sources_build_phase_id(project_source: str) -> str:
     return sources_phase.group("id")
 
 def _xcode_id(seed: str) -> str:
+    """创建确定性的 24 位 Xcode 风格对象 id。"""
+
     return hashlib.sha1(seed.encode("utf-8")).hexdigest().upper()[:24]
 
-def _platform_channel_base_msg() -> str:
-    lines = _header() + [
-        "import Foundation",
-        "",
-        "enum ChannelMsgError: Error {",
-        "    case invalidPayload",
-        "    case missingMessageFactory(String)",
-        "    case missingHandler(String)",
-        "    case methodChannelNotConfigured",
-        "    case flutterError(String)",
-        "    case typeMismatch(expected: String)",
-        "}",
-        "",
-        "protocol ChannelBaseMsg {",
-        "    var channelName: String { get }",
-        "    init(map: [String: Any]) throws",
-        "    func toMap() throws -> [String: Any]",
-        "}",
-        "",
-        "extension ChannelBaseMsg where Self: Codable {",
-        "    init(map: [String: Any]) throws {",
-        "        let data = try JSONSerialization.data(withJSONObject: map, options: [])",
-        "        self = try JSONDecoder().decode(Self.self, from: data)",
-        "    }",
-        "",
-        "    func toMap() throws -> [String: Any] {",
-        "        let data = try JSONEncoder().encode(self)",
-        "        if data.isEmpty {",
-        "            return [:]",
-        "        }",
-        "        let object = try JSONSerialization.jsonObject(with: data, options: [])",
-        "        return object as? [String: Any] ?? [:]",
-        "    }",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
-def _platform_channel_base_handler() -> str:
-    lines = _header() + [
-        "import Foundation",
-        "",
-        "protocol ChannelBaseHandler {",
-        "    func handle(_ message: ChannelBaseMsg) async throws -> ChannelBaseMsg",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
-def _channel_base_msg_register() -> str:
-    lines = _header() + [
-        "import Foundation",
-        "",
-        "final class ChannelBaseMsgRegister {",
-        "    typealias CreateChannelBaseMsgClosure = ([String: Any]) throws -> ChannelBaseMsg",
-        "",
-        "    private var channelMap: [String: CreateChannelBaseMsgClosure] = [:]",
-        "",
-        "    init() {",
-        "        GeneratedChannelRegistrations.registerMessages(self)",
-        "    }",
-        "",
-        "    func registerChannel(_ channelName: String, closure: @escaping CreateChannelBaseMsgClosure) {",
-        "        channelMap[channelName] = closure",
-        "    }",
-        "",
-        "    func getChannel(_ channelName: String, params: [String: Any]) throws -> ChannelBaseMsg {",
-        "        guard let factory = channelMap[channelName] else {",
-        "            throw ChannelMsgError.missingMessageFactory(channelName)",
-        "        }",
-        "        return try factory(params)",
-        "    }",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
-def _channel_handler_register() -> str:
-    lines = _header() + [
-        "import Foundation",
-        "",
-        "final class ChannelHandlerRegister {",
-        "    private var container: [String: ChannelBaseHandler] = [:]",
-        "",
-        "    init() {",
-        "        GeneratedChannelRegistrations.registerHandlers(self)",
-        "    }",
-        "",
-        "    func registerChannel(_ channelName: String, handler: ChannelBaseHandler) {",
-        "        container[channelName] = handler",
-        "    }",
-        "",
-        "    func getChannelHandler(_ channelName: String) throws -> ChannelBaseHandler {",
-        "        guard let handler = container[channelName] else {",
-        "            throw ChannelMsgError.missingHandler(channelName)",
-        "        }",
-        "        return handler",
-        "    }",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
-def _method_channel_msg_manager(method_channel_name: str) -> str:
-    escaped_method_channel_name = _escape_swift_string(method_channel_name)
-    lines = _header() + [
-        "import Flutter",
-        "import Foundation",
-        "",
-        "final class MethodChannelMsgManager {",
-        "    static let shared = MethodChannelMsgManager()",
-        "",
-        "    private var methodChannel: FlutterMethodChannel?",
-        "    private let msgRegister = ChannelBaseMsgRegister()",
-        "    let handlerRegister = ChannelHandlerRegister()",
-        "",
-        "    private init() {}",
-        "",
-        "    func configureBinaryMessenger(",
-        "        _ binaryMessenger: FlutterBinaryMessenger,",
-        f'        channelName: String = "{escaped_method_channel_name}"',
-        "    ) {",
-        "        dispose()",
-        "        methodChannel = FlutterMethodChannel(",
-        "            name: channelName,",
-        "            binaryMessenger: binaryMessenger",
-        "        )",
-        "        setupMethodCallHandler()",
-        "    }",
-        "",
-        "    func configureBinaryMessenger(",
-        "        engine: FlutterEngine,",
-        f'        channelName: String = "{escaped_method_channel_name}"',
-        "    ) {",
-        "        configureBinaryMessenger(engine.binaryMessenger, channelName: channelName)",
-        "    }",
-        "",
-        "    func dispose() {",
-        "        methodChannel?.setMethodCallHandler(nil)",
-        "        methodChannel = nil",
-        "    }",
-        "",
-        "    func invoke(_ message: ChannelBaseMsg) async throws -> ChannelBaseMsg {",
-        "        guard let methodChannel else {",
-        "            throw ChannelMsgError.methodChannelNotConfigured",
-        "        }",
-        "",
-        "        let methodName = message.channelName",
-        "        var params = try message.toMap()",
-        "        params[\"@:\"] = methodName",
-        "        let result = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Any?, Error>) in",
-        "            methodChannel.invokeMethod(methodName, arguments: params) { result in",
-        "                if let error = result as? FlutterError {",
-        "                    continuation.resume(throwing: ChannelMsgError.flutterError(error.message ?? error.code))",
-        "                    return",
-        "                }",
-        "                continuation.resume(returning: result)",
-        "            }",
-        "        }",
-        "",
-        "        guard let resultMap = result as? [String: Any] else {",
-        "            throw ChannelMsgError.invalidPayload",
-        "        }",
-        "        return try msgRegister.getChannel(methodName, params: resultMap)",
-        "    }",
-        "",
-        "    private func setupMethodCallHandler() {",
-        "        methodChannel?.setMethodCallHandler { [weak self] call, result in",
-        "            guard let self else {",
-        "                result(FlutterError(code: \"manager-released\", message: \"MethodChannelMsgManager released.\", details: nil))",
-        "                return",
-        "            }",
-        "",
-        "            Task {",
-        "                do {",
-        "                    let response = try await self.handle(call)",
-        "                    result(response)",
-        "                } catch {",
-        "                    result(FlutterError(code: \"channel-error\", message: String(describing: error), details: nil))",
-        "                }",
-        "            }",
-        "        }",
-        "    }",
-        "",
-        "    private func handle(_ call: FlutterMethodCall) async throws -> [String: Any] {",
-        "        let params = call.arguments as? [String: Any] ?? [:]",
-        "        let channelName = params[\"@:\"] as? String ?? call.method",
-        "        let message = try msgRegister.getChannel(channelName, params: params)",
-        "        let handler = try handlerRegister.getChannelHandler(channelName)",
-        "        let response = try await handler.handle(message)",
-        "        var responseMap = try response.toMap()",
-        "        responseMap[\"@:\"] = channelName",
-        "        return responseMap",
-        "    }",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
 def _escape_swift_string(value: str) -> str:
+    """转义生成 Swift 源码中的字符串字面量。"""
+
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 def _message_swift(message: MessageClass) -> str:
+    """为单个 Dart 消息渲染 Swift ChannelBaseMsg 实现。"""
+
     lines = _header() + [
         "import Foundation",
+        "import zh_native_channel",
         "",
         f"struct {message.swift_name}: Codable, ChannelBaseMsg {{",
         f'    var channelName: String {{ "{_escape_swift_string(message.channel_name)}" }}',
@@ -526,6 +359,8 @@ def _message_swift(message: MessageClass) -> str:
     return "\n".join(lines) + "\n"
 
 def _swift_type(field: DartField) -> str:
+    """将支持的 Dart 字段类型映射为 Swift 类型。"""
+
     type_map = {
         "String": "String",
         "int": "Int",

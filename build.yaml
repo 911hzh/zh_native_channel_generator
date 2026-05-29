@@ -5,13 +5,11 @@ builders:
     build_extensions:
       "$lib$":
         - "base/zHNativeChannel/ChannelGeneratedRegister.g.dart"
-        - "base/zHNativeChannel/ZHNativeChannelManager.g.dart"
     defaults:
       options:
         scan_globs:
           - lib/base/zHNativeChannel/msgs/**.dart
           - lib/base/zHNativeChannel/handlers/**.dart
-        method_channel_name: ZHNativeChannel
         basePath: lib/base/zHNativeChannel
         register_path: ChannelGeneratedRegister.g.dart
     auto_apply: dependents
