@@ -1,0 +1,8 @@
+.dart_tool/
+build/
+example/.dart_tool/
+example/build/
+example/android/local.properties
+example/ios/Flutter/Generated.xcconfig
+example/ios/Flutter/flutter_export_environment.sh
+example/ios/Flutter/ephemeral/

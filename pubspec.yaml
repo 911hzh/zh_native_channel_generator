@@ -1,7 +1,7 @@
 name: zh_native_channel_generator
 description: "Code generator for zh_native_channel."
 version: 0.0.1
-homepage:
+repository: https://github.com/hzh137940556/zh_native_channel_generator
 
 environment:
   sdk: ^3.8.0
@@ -17,7 +17,3 @@ executables:
 dev_dependencies:
   lints: ^6.0.0
   test: ^1.25.0
-
-dependency_overrides:
-  zh_native_channel:
-    path: ../zh_native_channel
