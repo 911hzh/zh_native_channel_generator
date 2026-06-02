@@ -16,7 +16,7 @@
     },
     {
       "name": "zh_native_channel",
-      "version": "0.0.1",
+      "version": "0.0.6",
       "dependencies": [
         "flutter",
         "flutter_web_plugins"
@@ -24,7 +24,7 @@
     },
     {
       "name": "zh_native_channel_generator",
-      "version": "0.0.1",
+      "version": "0.0.6",
       "dependencies": [
         "build",
         "glob",
