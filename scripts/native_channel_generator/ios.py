@@ -369,11 +369,6 @@ def _xcode_id(seed: str) -> str:
 
     return hashlib.sha1(seed.encode("utf-8")).hexdigest().upper()[:24]
 
-def _escape_swift_string(value: str) -> str:
-    """转义生成 Swift 源码中的字符串字面量。"""
-
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
 def _message_swift(message: MessageClass) -> str:
     """为单个 Dart 消息渲染 Swift ChannelBaseMsg 实现。"""
 
@@ -382,7 +377,6 @@ def _message_swift(message: MessageClass) -> str:
         "import zh_native_channel",
         "",
         f"struct {message.swift_name}: Codable, ChannelBaseMsg {{",
-        f'    var channelName: String {{ "{_escape_swift_string(message.channel_name)}" }}',
     ]
 
     for field in message.fields:

@@ -9,8 +9,6 @@ import com.example.zh_native_channel.ChannelMsgException
 data class PingMsg(
     val text: String
 ) : ChannelBaseMsg {
-    override val channelName: String = "PingMsg"
-
     override fun toMap(): Map<String, Any?> {
         return mapOf(
             "text" to text

@@ -291,8 +291,6 @@ def _android_message_kotlin(package_name: str, message: MessageClass) -> str:
     lines.extend(
         [
             ") : ChannelBaseMsg {",
-            f'    override val channelName: String = "{_escape_kotlin_string(message.channel_name)}"',
-            "",
             "    override fun toMap(): Map<String, Any?> {",
             "        return mapOf(",
         ]
@@ -356,8 +354,3 @@ def _kotlin_value_reader(field: DartField) -> str:
     if field.dart_type in ("double", "num"):
         return f"({value} as? Number)?.toDouble() ?: throw {error}"
     return f"{value} as? {_kotlin_type(field)} ?: throw {error}"
-
-def _escape_kotlin_string(value: str) -> str:
-    """转义生成 Kotlin 源码中的字符串字面量。"""
-
-    return value.replace("\\", "\\\\").replace('"', '\\"')

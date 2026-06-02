@@ -5,6 +5,5 @@ import Foundation
 import zh_native_channel
 
 struct PingMsg: Codable, ChannelBaseMsg {
-    var channelName: String { "PingMsg" }
     let text: String
 }

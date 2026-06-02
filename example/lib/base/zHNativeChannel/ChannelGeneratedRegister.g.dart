@@ -7,19 +7,14 @@
 import 'package:zh_native_channel/zh_native_channel.dart';
 import 'package:zh_native_channel_generator_example/base/zHNativeChannel/msgs/ping_msg.dart';
 
-void initializeGeneratedChannels(ZHNativeChannel channel) {
+void initializeGeneratedChannels() {
+  final channel = ZHNativeChannel.instance;
   channel.initializeRegisters((msgRegister, handlerRegister) {
     registerGeneratedChannels(
       msgRegister: msgRegister,
       handlerRegister: handlerRegister,
     );
   });
-}
-
-ZHNativeChannel createGeneratedChannel() {
-  final channel = ZHNativeChannel.instance;
-  initializeGeneratedChannels(channel);
-  return channel;
 }
 
 void registerGeneratedChannels({
@@ -34,5 +29,4 @@ void registerGeneratedChannelMessages(ChannelBaseMsgRegister register) {
   register.registerChannel('PingMsg', PingMsg.fromMap);
 }
 
-void registerGeneratedChannelHandlers(ChannelHandlerRegister register) {
-}
+void registerGeneratedChannelHandlers(ChannelHandlerRegister register) {}

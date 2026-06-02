@@ -78,9 +78,13 @@ void main() {
       '${sandbox.path}/web/zHNativeChannel/GeneratedChannelRegistrations.ts',
     );
 
-    expect(iosMessage.readAsStringSync(), contains('struct PingMsg'));
+    final iosMessageSource = iosMessage.readAsStringSync();
+    final androidMessageSource = androidMessage.readAsStringSync();
+    expect(iosMessageSource, contains('struct PingMsg'));
+    expect(iosMessageSource, isNot(contains('channelName')));
     expect(iosRegister.readAsStringSync(), contains('PingMsgHandler()'));
-    expect(androidMessage.readAsStringSync(), contains('data class PingMsg'));
+    expect(androidMessageSource, contains('data class PingMsg'));
+    expect(androidMessageSource, isNot(contains('channelName')));
     expect(androidRegister.readAsStringSync(), contains('PingMsgHandler()'));
     expect(webMessage.readAsStringSync(), contains('export class PingMsg'));
     expect(webRegister.readAsStringSync(), contains('new PingMsgHandler()'));

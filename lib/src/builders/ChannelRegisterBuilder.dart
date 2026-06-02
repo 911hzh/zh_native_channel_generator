@@ -133,7 +133,8 @@ class ChannelRegisterBuilder implements Builder {
     }
 
     buffer
-      ..writeln('void initializeGeneratedChannels(ZHNativeChannel channel) {')
+      ..writeln('void initializeGeneratedChannels() {')
+      ..writeln('  final channel = ZHNativeChannel.instance;')
       ..writeln(
         '  channel.initializeRegisters((msgRegister, handlerRegister) {',
       )
@@ -142,14 +143,6 @@ class ChannelRegisterBuilder implements Builder {
       ..writeln('      handlerRegister: handlerRegister,')
       ..writeln('    );')
       ..writeln('  });')
-      ..writeln('}')
-      ..writeln();
-
-    buffer
-      ..writeln('ZHNativeChannel createGeneratedChannel() {')
-      ..writeln('  final channel = ZHNativeChannel.instance;')
-      ..writeln('  initializeGeneratedChannels(channel);')
-      ..writeln('  return channel;')
       ..writeln('}')
       ..writeln();
 
