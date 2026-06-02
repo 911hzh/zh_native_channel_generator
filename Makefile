@@ -1,25 +1,27 @@
-# >>> zh_native_channel_generator
-PYTHON ?= python3
-ZH_NATIVE_CHANNEL_GENERATOR ?= scripts/generate_native_channel.py
-ZH_NATIVE_CHANNEL_CONFIG ?= zh_native_channel_config.json
+EXAMPLE_DIR ?= example
 
-.PHONY: build-runner-sync-config build-runner-build create-platformcode-all create-platformcode-ios create-platformcode-android create-platformcode-web
+.PHONY: clean-generated build-runner-sync-config build-runner-build create-platformcode-all create-platformcode-ios create-platformcode-android create-platformcode-web gen
+
+clean-generated:
+	$(MAKE) -C $(EXAMPLE_DIR) clean-generated
 
 build-runner-sync-config:
-	$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --sync-build-config-only
+	$(MAKE) -C $(EXAMPLE_DIR) build-runner-sync-config
 
-build-runner-build: build-runner-sync-config
-	flutter pub run build_runner build --delete-conflicting-outputs
+build-runner-build:
+	$(MAKE) -C $(EXAMPLE_DIR) build-runner-build
+
+gen:
+	$(MAKE) -C $(EXAMPLE_DIR) gen
 
 create-platformcode-all:
-	$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform all
+	$(MAKE) -C $(EXAMPLE_DIR) create-platformcode-all
 
 create-platformcode-ios:
-	$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform ios
+	$(MAKE) -C $(EXAMPLE_DIR) create-platformcode-ios
 
 create-platformcode-android:
-	$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform android
+	$(MAKE) -C $(EXAMPLE_DIR) create-platformcode-android
 
 create-platformcode-web:
-	$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform web
-# <<< zh_native_channel_generator
+	$(MAKE) -C $(EXAMPLE_DIR) create-platformcode-web

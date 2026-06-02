@@ -175,6 +175,127 @@ void main() {
     );
   });
 
+  // 验证清理命令会读取 Dart 配置，而不是删除固定路径。
+  test('clean generated deletes configured Dart register file', () async {
+    _logStep('复制 example fixture 到临时沙盒');
+    final sandbox = await _copyFixtureToTemp(fixtureRoot);
+    addTearDown(() {
+      if (sandbox.existsSync()) {
+        sandbox.deleteSync(recursive: true);
+      }
+    });
+
+    final configuredRegister = File(
+      '${sandbox.path}/custom/dart/CustomChannelRegister.g.dart',
+    );
+    final defaultRegister = File(
+      '${sandbox.path}/lib/base/zHNativeChannel/ChannelGeneratedRegister.g.dart',
+    );
+    configuredRegister.createSync(recursive: true);
+    configuredRegister.writeAsStringSync('configured generated file');
+    defaultRegister.createSync(recursive: true);
+    defaultRegister.writeAsStringSync('default generated file');
+
+    final configFile = File('${sandbox.path}/custom_dart_clean_config.json');
+    _logStep('写入自定义 Dart 注册文件输出路径');
+    configFile.writeAsStringSync(
+      jsonEncode({
+        'dart': {
+          'messageScanPath': ['${sandbox.path}/lib/base/zHNativeChannel/msgs'],
+          'generatedChannelRegisterOutputPath': configuredRegister.path,
+        },
+      }),
+    );
+
+    _logStep('只执行清理命令，验证删除配置路径');
+    final result = await Process.run('python3', [
+      generatorScript.path,
+      configFile.path,
+      '--clean-generated-only',
+    ]);
+
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    expect(configuredRegister.existsSync(), isFalse);
+    expect(defaultRegister.existsSync(), isTrue);
+  });
+
+  // 验证清理命令会同时删除 iOS、Android 和 Web 的生成产物。
+  test('clean generated deletes native generated outputs', () async {
+    _logStep('复制 example fixture 到临时沙盒');
+    final sandbox = await _copyFixtureToTemp(fixtureRoot);
+    addTearDown(() {
+      if (sandbox.existsSync()) {
+        sandbox.deleteSync(recursive: true);
+      }
+    });
+
+    final iosMessage = Directory(
+      '${sandbox.path}/ios/Runner/zHNativeChannel/msgs',
+    );
+    final iosGeneratedMessage = File('${iosMessage.path}/PingMsg.g.swift');
+    final iosHandwrittenMessage = File('${iosMessage.path}/Handwritten.swift');
+    final iosRegister = File(
+      '${sandbox.path}/ios/Runner/zHNativeChannel/GeneratedChannelRegistrations.g.swift',
+    );
+    final androidMessage = Directory(
+      '${sandbox.path}/android/app/src/main/kotlin/com/example/'
+      'zh_native_channel_generator_example/zHNativeChannel/msgs',
+    );
+    final androidGeneratedMessage = File('${androidMessage.path}/PingMsg.g.kt');
+    final androidHandwrittenMessage = File(
+      '${androidMessage.path}/Handwritten.kt',
+    );
+    final androidRegister = File(
+      '${sandbox.path}/android/app/src/main/kotlin/com/example/'
+      'zh_native_channel_generator_example/zHNativeChannel/GeneratedChannelRegistrations.g.kt',
+    );
+    final webMessage = Directory('${sandbox.path}/web/zHNativeChannel/msgs');
+    final webGeneratedMessage = File('${webMessage.path}/PingMsg.ts');
+    final webRegister = File(
+      '${sandbox.path}/web/zHNativeChannel/GeneratedChannelRegistrations.ts',
+    );
+    final webRuntime = File('${sandbox.path}/web/zHNativeChannel/index.ts');
+
+    _logStep('写入 iOS、Android 和 Web 生成产物，模拟待清理文件');
+    iosMessage.createSync(recursive: true);
+    iosGeneratedMessage.writeAsStringSync('stale ios');
+    iosHandwrittenMessage.writeAsStringSync('handwritten ios');
+    iosRegister.createSync(recursive: true);
+    iosRegister.writeAsStringSync('stale ios register');
+    androidMessage.createSync(recursive: true);
+    androidGeneratedMessage.writeAsStringSync('stale android');
+    androidHandwrittenMessage.writeAsStringSync('handwritten android');
+    androidRegister.createSync(recursive: true);
+    androidRegister.writeAsStringSync('stale android register');
+    webMessage.createSync(recursive: true);
+    webGeneratedMessage.writeAsStringSync('stale web');
+    webRegister.createSync(recursive: true);
+    webRegister.writeAsStringSync('stale web register');
+    webRuntime.createSync(recursive: true);
+    webRuntime.writeAsStringSync('stale web runtime');
+
+    _logStep('只执行清理命令，验证原生生成产物被删除');
+    final result = await Process.run('python3', [
+      generatorScript.path,
+      '${sandbox.path}/zh_native_channel_config.json',
+      '--clean-generated-only',
+    ]);
+
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    expect(iosMessage.existsSync(), isTrue);
+    expect(iosGeneratedMessage.existsSync(), isFalse);
+    expect(iosHandwrittenMessage.existsSync(), isTrue);
+    expect(iosRegister.existsSync(), isFalse);
+    expect(androidMessage.existsSync(), isTrue);
+    expect(androidGeneratedMessage.existsSync(), isFalse);
+    expect(androidHandwrittenMessage.existsSync(), isTrue);
+    expect(androidRegister.existsSync(), isFalse);
+    expect(webMessage.existsSync(), isTrue);
+    expect(webGeneratedMessage.existsSync(), isFalse);
+    expect(webRegister.existsSync(), isFalse);
+    expect(webRuntime.existsSync(), isFalse);
+  });
+
   // 验证最小配置可以全部走默认路径和默认扫描规则。
   test('minimal config uses default paths and project-wide scans', () async {
     _logStep('复制 example fixture 到临时沙盒');

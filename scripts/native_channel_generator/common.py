@@ -17,6 +17,7 @@ DEFAULT_ANDROID_OUTPUT_DIRECTORY = (
 )
 DEFAULT_ANDROID_PACKAGE_NAME = "com.example.zh_native_channel_example.zHNativeChannel"
 DEFAULT_WEB_OUTPUT_DIRECTORY = "web/zHNativeChannel"
+LOG_PREFIX = "[zh_native_channel_generator]"
 
 
 @dataclass(frozen=True)
@@ -568,6 +569,11 @@ def _write_file(path: Path, content: str) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+def log_step(message: str) -> None:
+    """输出生成脚本的阶段日志，方便从 Makefile 或 CI 日志中定位进度。"""
+
+    print(f"{LOG_PREFIX} {message}")
 
 def _header() -> list[str]:
     """返回平台生成文件的标准头部。"""

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import shutil
 from pathlib import Path
 
 from .common import (
@@ -12,24 +11,35 @@ from .common import (
     MessageClass,
     _header,
     _write_file,
+    log_step,
 )
 
 
 def generate_ios(config: IOSGeneratorConfig, messages: list[MessageClass]) -> list[HandlerClass]:
     """生成 iOS 消息类型、注册代码和 Xcode 源文件条目。"""
 
+    log_step("iOS 脚本开始执行")
+    log_step(
+        "iOS 扫描 handler: "
+        + ", ".join(path.as_posix() for path in config.handler_scan_paths)
+    )
     handlers = _scan_ios_handlers(config.handler_scan_paths)
+    log_step(f"iOS 已扫描到 {len(handlers)} 个 handler")
+    log_step(f"iOS 清理旧生成产物: {config.output_root}")
     _reset_output_root(
         config.output_root,
         config.generated_messages_output_path,
         config.generated_registrations_output_path,
     )
+    log_step(f"iOS 写入消息文件: {config.generated_messages_output_path}")
     _write_messages(config.generated_messages_output_path, messages)
+    log_step(f"iOS 写入注册文件: {config.generated_registrations_output_path}")
     _write_generated_registrations(
         config.generated_registrations_output_path,
         messages,
         handlers,
     )
+    log_step("iOS 同步 Xcode Sources")
     _sync_xcode_sources(
         config.output_root,
         config.generated_messages_output_path,
@@ -37,7 +47,18 @@ def generate_ios(config: IOSGeneratorConfig, messages: list[MessageClass]) -> li
         handlers,
         config.xcode_project_path,
     )
+    log_step("iOS 脚本执行完成")
     return handlers
+
+
+def clean_ios_generated(config: IOSGeneratorConfig) -> list[Path]:
+    """删除配置指定位置的 iOS 生成产物，并返回实际删除的路径。"""
+
+    return _delete_generated_outputs(
+        config.output_root,
+        config.generated_messages_output_path,
+        config.generated_registrations_output_path,
+    )
 
 
 def _reset_output_root(
@@ -47,6 +68,22 @@ def _reset_output_root(
 ) -> None:
     """写入新产物前删除旧的 iOS 生成文件。"""
 
+    _delete_generated_outputs(
+        output_root,
+        generated_messages_output_path,
+        generated_registrations_output_path,
+    )
+    generated_messages_output_path.mkdir(parents=True, exist_ok=True)
+
+
+def _delete_generated_outputs(
+    output_root: Path,
+    generated_messages_output_path: Path,
+    generated_registrations_output_path: Path,
+) -> list[Path]:
+    """删除旧的 iOS 生成文件，保留用户配置的输出目录。"""
+
+    deleted_paths: list[Path] = []
     generated_files = [
         "ChannelBaseMsg.g.swift",
         "ChannelBaseHandler.g.swift",
@@ -54,29 +91,29 @@ def _reset_output_root(
         "ChannelHandlerRegister.g.swift",
         "MethodChannelMsgManager.g.swift",
         "GeneratedChannelRegistrations.g.swift",
-        "ChannelBaseMsg.swift",
-        "ChannelBaseHandler.swift",
-        "ChannelBaseMsgRegister.swift",
-        "ChannelHandlerRegister.swift",
-        "MethodChannelMsgManager.swift",
-        "GeneratedChannelRegistrations.swift",
     ]
     for file_name in generated_files:
         generated_file = output_root / file_name
         if generated_file.exists():
             generated_file.unlink()
+            deleted_paths.append(generated_file)
 
     generated_registrations_file = (
         generated_registrations_output_path / "GeneratedChannelRegistrations.g.swift"
     )
     if generated_registrations_file.exists():
         generated_registrations_file.unlink()
+        deleted_paths.append(generated_registrations_file)
 
-    for generated_dir in (generated_messages_output_path, output_root / "handlers"):
-        if generated_dir.exists():
-            shutil.rmtree(generated_dir)
+    if generated_messages_output_path.exists():
+        for generated_message_file in sorted(
+            generated_messages_output_path.glob("*.g.swift")
+        ):
+            if generated_message_file.is_file():
+                generated_message_file.unlink()
+                deleted_paths.append(generated_message_file)
 
-    generated_messages_output_path.mkdir(parents=True, exist_ok=True)
+    return deleted_paths
 
 def _scan_ios_handlers(scan_paths: list[Path]) -> list[HandlerClass]:
     """扫描 Swift 文件中的 PlatformChannelHandler 注解。"""

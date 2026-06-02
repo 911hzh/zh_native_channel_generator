@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 from pathlib import Path
 
 from .common import (
@@ -11,6 +10,7 @@ from .common import (
     MessageClass,
     _parse_platform_handler_file,
     _write_file,
+    log_step,
 )
 
 
@@ -20,17 +20,26 @@ def generate_android(
 ) -> list[HandlerClass]:
     """生成 Android 消息类型和注册胶水代码。"""
 
+    log_step("Android 脚本开始执行")
+    log_step(
+        "Android 扫描 handler: "
+        + ", ".join(path.as_posix() for path in config.handler_scan_paths)
+    )
     handlers = _scan_android_handlers(config.handler_scan_paths)
+    log_step(f"Android 已扫描到 {len(handlers)} 个 handler")
+    log_step(f"Android 清理旧生成产物: {config.output_root}")
     _reset_android_output_root(
         config.output_root,
         config.generated_messages_output_path,
         config.generated_registrations_output_path,
     )
+    log_step(f"Android 写入消息文件: {config.generated_messages_output_path}")
     _write_android_messages(
         config.generated_messages_output_path,
         config.package_name,
         messages,
     )
+    log_step(f"Android 写入注册文件: {config.generated_registrations_output_path}")
     _write_android_generated_registrations(
         config.generated_registrations_output_path,
         config.output_root,
@@ -38,7 +47,18 @@ def generate_android(
         messages,
         handlers,
     )
+    log_step("Android 脚本执行完成")
     return handlers
+
+
+def clean_android_generated(config: AndroidGeneratorConfig) -> list[Path]:
+    """删除配置指定位置的 Android 生成产物，并返回实际删除的路径。"""
+
+    return _delete_android_generated_outputs(
+        config.output_root,
+        config.generated_messages_output_path,
+        config.generated_registrations_output_path,
+    )
 
 
 def _reset_android_output_root(
@@ -48,6 +68,22 @@ def _reset_android_output_root(
 ) -> None:
     """写入新产物前删除旧的 Android 生成文件。"""
 
+    _delete_android_generated_outputs(
+        output_root,
+        generated_messages_output_path,
+        generated_registrations_output_path,
+    )
+    generated_messages_output_path.mkdir(parents=True, exist_ok=True)
+
+
+def _delete_android_generated_outputs(
+    output_root: Path,
+    generated_messages_output_path: Path,
+    generated_registrations_output_path: Path,
+) -> list[Path]:
+    """删除旧的 Android 生成文件，保留用户配置的输出目录。"""
+
+    deleted_paths: list[Path] = []
     generated_files = [
         "ChannelBaseMsg.g.kt",
         "ChannelBaseHandler.g.kt",
@@ -56,29 +92,29 @@ def _reset_android_output_root(
         "ChannelHandlerRegister.g.kt",
         "MethodChannelMsgManager.g.kt",
         "GeneratedChannelRegistrations.g.kt",
-        "ChannelBaseMsg.kt",
-        "ChannelBaseHandler.kt",
-        "ChannelMsgException.kt",
-        "ChannelBaseMsgRegister.kt",
-        "ChannelHandlerRegister.kt",
-        "MethodChannelMsgManager.kt",
-        "GeneratedChannelRegistrations.kt",
     ]
     for file_name in generated_files:
         generated_file = output_root / file_name
         if generated_file.exists():
             generated_file.unlink()
+            deleted_paths.append(generated_file)
 
     generated_registrations_file = (
         generated_registrations_output_path / "GeneratedChannelRegistrations.g.kt"
     )
     if generated_registrations_file.exists():
         generated_registrations_file.unlink()
+        deleted_paths.append(generated_registrations_file)
 
-    generated_msgs = generated_messages_output_path
-    if generated_msgs.exists():
-        shutil.rmtree(generated_msgs)
-    generated_msgs.mkdir(parents=True, exist_ok=True)
+    if generated_messages_output_path.exists():
+        for generated_message_file in sorted(
+            generated_messages_output_path.glob("*.g.kt")
+        ):
+            if generated_message_file.is_file():
+                generated_message_file.unlink()
+                deleted_paths.append(generated_message_file)
+
+    return deleted_paths
 
 def _scan_android_handlers(scan_paths: list[Path]) -> list[HandlerClass]:
     """扫描 Kotlin handler 文件中的 PlatformChannelHandler 注解。"""

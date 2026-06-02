@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from native_channel_generator.android import generate_android
+from native_channel_generator.android import clean_android_generated, generate_android
 from native_channel_generator.common import (
     DEFAULT_CONFIG_NAME,
     DEFAULT_DART_HANDLER_SCAN_PATH,
@@ -20,9 +20,10 @@ from native_channel_generator.common import (
     _read_web_config,
     _resolve_config_path,
     _scan_messages,
+    log_step,
 )
-from native_channel_generator.ios import generate_ios
-from native_channel_generator.web import generate_web
+from native_channel_generator.ios import clean_ios_generated, generate_ios
+from native_channel_generator.web import clean_web_generated, generate_web
 
 
 def main() -> int:
@@ -48,64 +49,92 @@ def main() -> int:
         action="store_true",
         help="Only sync build.yaml from config JSON and exit.",
     )
+    parser.add_argument(
+        "--clean-generated-only",
+        action="store_true",
+        help="Only delete configured generated files and exit.",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config).resolve()
+    log_step(f"开始执行入口脚本: {Path(__file__).name}")
+    log_step(f"读取配置文件: {config_path}")
     config = _read_config(config_path)
     config_root = config_path.parent
+    log_step(f"项目根目录: {config_root}")
     _ensure_makefile(config_root, config_path)
+    log_step("已同步 Makefile 生成命令块")
     did_sync_build_yaml = _sync_build_yaml(config_root, config)
 
     if args.sync_build_config_only:
         if did_sync_build_yaml:
-            print(f"Synced build.yaml from {config_path}")
+            log_step(f"已同步 build.yaml: {config_path}")
         else:
-            print(
-                f"Skipped build.yaml sync because {config_root / 'pubspec.yaml'} does not exist."
+            log_step(
+                f"跳过 build.yaml 同步，未找到 pubspec.yaml: {config_root / 'pubspec.yaml'}"
             )
         return 0
 
-    messages = _scan_messages(_read_message_scan_paths(config, config_root))
+    if args.clean_generated_only:
+        deleted_files = _clean_generated_files(config, config_root, args.platform)
+        if deleted_files:
+            for deleted_file in deleted_files:
+                log_step(f"已删除生成产物: {deleted_file}")
+        else:
+            log_step("未发现需要删除的生成产物")
+        return 0
+
+    message_scan_paths = _read_message_scan_paths(config, config_root)
+    log_step(
+        "开始扫描 Dart 消息: "
+        + ", ".join(path.as_posix() for path in message_scan_paths)
+    )
+    messages = _scan_messages(message_scan_paths)
+    log_step(f"已扫描到 {len(messages)} 个 Dart 消息类型")
 
     if args.platform in ("all", "ios"):
+        log_step("准备执行 iOS 生成脚本")
         ios_config = _read_ios_config(config, config_root)
         if ios_config is None:
             if args.platform == "ios":
                 raise ValueError("Missing platforms.ios config.")
+            log_step("跳过 iOS 生成，配置中未启用 platforms.ios")
         else:
             ios_handlers = generate_ios(ios_config, messages)
-            print(
-                f"Generated {len(messages)} message type(s) and "
-                f"{len(ios_handlers)} iOS handler registration(s): "
-                f"{ios_config.output_root}"
+            log_step(
+                f"iOS 生成完成: {len(messages)} 个消息类型，"
+                f"{len(ios_handlers)} 个 handler 注册，输出目录 {ios_config.output_root}"
             )
 
     if args.platform in ("all", "android"):
+        log_step("准备执行 Android 生成脚本")
         android_config = _read_android_config(config, config_root)
         if android_config is None:
             if args.platform == "android":
                 raise ValueError("Missing platforms.android config.")
+            log_step("跳过 Android 生成，配置中未启用 platforms.android")
         else:
             android_handlers = generate_android(android_config, messages)
-            print(
-                f"Generated {len(messages)} message type(s) and "
-                f"{len(android_handlers)} Android handler registration(s): "
-                f"{android_config.output_root}"
+            log_step(
+                f"Android 生成完成: {len(messages)} 个消息类型，"
+                f"{len(android_handlers)} 个 handler 注册，输出目录 {android_config.output_root}"
             )
 
     if args.platform in ("all", "web"):
+        log_step("准备执行 Web 生成脚本")
         web_config = _read_web_config(config, config_root)
         if web_config is None:
             if args.platform == "web":
                 raise ValueError("Missing platforms.web config.")
+            log_step("跳过 Web 生成，配置中未启用 platforms.web")
         else:
             web_handlers = generate_web(web_config, messages)
-            print(
-                f"Generated {len(messages)} message type(s) and "
-                f"{len(web_handlers)} Web handler registration(s): "
-                f"{web_config.output_root}"
+            log_step(
+                f"Web 生成完成: {len(messages)} 个消息类型，"
+                f"{len(web_handlers)} 个 handler 注册，输出目录 {web_config.output_root}"
             )
 
+    log_step("生成入口脚本执行完成")
     return 0
 
 
@@ -122,75 +151,134 @@ def _read_message_scan_paths(config: dict, config_root: Path) -> list[Path]:
     return [_resolve_config_path(path, config_root) for path in scan_paths]
 
 
+def _clean_dart_generated_files(config: dict, config_root: Path) -> list[Path]:
+    """按配置删除 Dart build_runner 生成的注册文件。"""
+
+    default_output_directory = _read_dart_default_output_directory(config)
+    register_output_path = _read_dart_register_output_path(
+        config,
+        default_output_directory,
+    )
+    register_file = _resolve_config_path(register_output_path, config_root)
+    if not register_file.exists():
+        return []
+    if not register_file.is_file():
+        raise ValueError(f"Dart generated output is not a file: {register_file}")
+    register_file.unlink()
+    return [register_file]
+
+
+def _clean_generated_files(config: dict, config_root: Path, platform: str) -> list[Path]:
+    """按配置删除 Dart 和平台生成产物。"""
+
+    deleted_files = _clean_dart_generated_files(config, config_root)
+
+    if platform in ("all", "ios"):
+        ios_config = _read_ios_config(config, config_root)
+        if ios_config is None:
+            if platform == "ios":
+                raise ValueError("Missing platforms.ios config.")
+            log_step("跳过 iOS 清理，配置中未启用 platforms.ios")
+        else:
+            log_step(f"清理 iOS 生成产物: {ios_config.output_root}")
+            deleted_files.extend(clean_ios_generated(ios_config))
+
+    if platform in ("all", "android"):
+        android_config = _read_android_config(config, config_root)
+        if android_config is None:
+            if platform == "android":
+                raise ValueError("Missing platforms.android config.")
+            log_step("跳过 Android 清理，配置中未启用 platforms.android")
+        else:
+            log_step(f"清理 Android 生成产物: {android_config.output_root}")
+            deleted_files.extend(clean_android_generated(android_config))
+
+    if platform in ("all", "web"):
+        web_config = _read_web_config(config, config_root)
+        if web_config is None:
+            if platform == "web":
+                raise ValueError("Missing platforms.web config.")
+            log_step("跳过 Web 清理，配置中未启用 platforms.web")
+        else:
+            log_step(f"清理 Web 生成产物: {web_config.output_root}")
+            deleted_files.extend(clean_web_generated(web_config))
+
+    return deleted_files
+
+
 def _ensure_makefile(config_root: Path, config_path: Path) -> None:
     """创建或更新由生成器管理的 Makefile 命令块。"""
 
     makefile_path = config_root / "Makefile"
-    script_path = Path(__file__).resolve()
-    relative_script_path = _make_relative_path(script_path, config_root)
     relative_config_path = _make_relative_path(config_path, config_root)
 
     block_start = "# >>> zh_native_channel_generator"
     block_end = "# <<< zh_native_channel_generator"
-    native_targets = f"""PYTHON ?= python3
-ZH_NATIVE_CHANNEL_GENERATOR ?= {relative_script_path}
+    native_targets = f"""ZH_NATIVE_CHANNEL_GENERATOR ?= dart run zh_native_channel_generator:generate_native_channel
 ZH_NATIVE_CHANNEL_CONFIG ?= {relative_config_path}
 
-.PHONY: build-runner-sync-config build-runner-build create-platformcode-all create-platformcode-ios create-platformcode-android create-platformcode-web gen
+.PHONY: clean-generated build-runner-sync-config build-runner-build create-platformcode-all create-platformcode-ios create-platformcode-android create-platformcode-web gen
+
+clean-generated:
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --clean-generated-only
 
 build-runner-sync-config:
-\t$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --sync-build-config-only
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --sync-build-config-only
 
 build-runner-build: build-runner-sync-config
 \t@if [ ! -f pubspec.yaml ]; then echo "当前目录没有 pubspec.yaml，跳过 build_runner。"; else dart run build_runner build; fi
 
 gen:
+\t$(MAKE) clean-generated
 \t$(MAKE) build-runner-build
 \t$(MAKE) create-platformcode-all
 
 create-platformcode-all:
-\t$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform all
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform all
 
 create-platformcode-ios:
-\t$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform ios
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform ios
 
 create-platformcode-android:
-\t$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform android
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform android
 
 create-platformcode-web:
-\t$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform web
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform web
 """
     block = f"""{block_start}
 {native_targets}{block_end}
 """
     standalone_makefile = f"""{block_start}
-PYTHON ?= python3
-ZH_NATIVE_CHANNEL_GENERATOR ?= {relative_script_path}
+ZH_NATIVE_CHANNEL_GENERATOR ?= dart run zh_native_channel_generator:generate_native_channel
 ZH_NATIVE_CHANNEL_CONFIG ?= {relative_config_path}
 
-.PHONY: build-runner-sync-config build-runner-build create-platformcode-all create-platformcode-ios create-platformcode-android create-platformcode-web gen
+.PHONY: clean-generated build-runner-sync-config build-runner-build create-platformcode-all create-platformcode-ios create-platformcode-android create-platformcode-web gen
+
+clean-generated:
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --clean-generated-only
 
 build-runner-sync-config:
-\t$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --sync-build-config-only
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --sync-build-config-only
 
 build-runner-build: build-runner-sync-config
 \t@if [ ! -f pubspec.yaml ]; then echo "当前目录没有 pubspec.yaml，跳过 build_runner。"; else dart run build_runner build; fi
 
 gen:
+\t$(MAKE) clean-generated
 \t$(MAKE) build-runner-build
 \t$(MAKE) create-platformcode-all
 
 create-platformcode-all:
-\t$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform all
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform all
 
 create-platformcode-ios:
-\t$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform ios
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform ios
 
 create-platformcode-android:
-\t$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform android
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform android
 
 create-platformcode-web:
-\t$(PYTHON) $(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform web
+\t$(ZH_NATIVE_CHANNEL_GENERATOR) $(ZH_NATIVE_CHANNEL_CONFIG) --platform web
 {block_end}
 """
 
@@ -199,6 +287,9 @@ create-platformcode-web:
         return
 
     content = makefile_path.read_text(encoding="utf-8")
+    if "ZH_NATIVE_CHANNEL_GENERATOR_MAKEFILE" in content:
+        return
+
     if block_start in content and block_end in content:
         before, rest = content.split(block_start, 1)
         _, after = rest.split(block_end, 1)

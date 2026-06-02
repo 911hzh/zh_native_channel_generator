@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
 from .common import (
@@ -11,6 +10,7 @@ from .common import (
     WebGeneratorConfig,
     _parse_platform_handler_file,
     _write_file,
+    log_step,
 )
 
 DEFAULT_METHOD_CHANNEL_NAME = "zh_native_channel"
@@ -22,14 +22,24 @@ def generate_web(
 ) -> list[HandlerClass]:
     """生成 Web 运行时文件、消息类型和注册代码。"""
 
+    log_step("Web 脚本开始执行")
+    log_step(
+        "Web 扫描 handler: "
+        + ", ".join(path.as_posix() for path in config.handler_scan_paths)
+    )
     handlers = _scan_web_handlers(config.handler_scan_paths)
+    log_step(f"Web 已扫描到 {len(handlers)} 个 handler")
+    log_step(f"Web 清理旧生成产物: {config.output_root}")
     _reset_web_output_root(
         config.output_root,
         config.generated_messages_output_path,
         config.generated_registrations_output_path,
     )
+    log_step(f"Web 写入运行时文件: {config.output_root}")
     _write_web_runtime_files(config.output_root, config)
+    log_step(f"Web 写入消息文件: {config.generated_messages_output_path}")
     _write_web_messages(config.generated_messages_output_path, messages)
+    log_step(f"Web 写入注册文件: {config.generated_registrations_output_path}")
     _write_web_generated_registrations(
         config.generated_registrations_output_path,
         config.output_root,
@@ -38,7 +48,18 @@ def generate_web(
         messages,
         handlers,
     )
+    log_step("Web 脚本执行完成")
     return handlers
+
+
+def clean_web_generated(config: WebGeneratorConfig) -> list[Path]:
+    """删除配置指定位置的 Web 生成产物，并返回实际删除的路径。"""
+
+    return _delete_web_generated_outputs(
+        config.output_root,
+        config.generated_messages_output_path,
+        config.generated_registrations_output_path,
+    )
 
 
 def _reset_web_output_root(
@@ -48,6 +69,22 @@ def _reset_web_output_root(
 ) -> None:
     """写入新产物前删除旧的 Web 生成文件。"""
 
+    _delete_web_generated_outputs(
+        output_root,
+        generated_messages_output_path,
+        generated_registrations_output_path,
+    )
+    generated_messages_output_path.mkdir(parents=True, exist_ok=True)
+
+
+def _delete_web_generated_outputs(
+    output_root: Path,
+    generated_messages_output_path: Path,
+    generated_registrations_output_path: Path,
+) -> list[Path]:
+    """删除旧的 Web 生成文件，保留用户配置的输出目录。"""
+
+    deleted_paths: list[Path] = []
     generated_files = [
         "ChannelBaseMsg.ts",
         "ChannelBaseHandler.ts",
@@ -62,17 +99,22 @@ def _reset_web_output_root(
         generated_file = output_root / file_name
         if generated_file.exists():
             generated_file.unlink()
+            deleted_paths.append(generated_file)
 
     generated_registrations_file = (
         generated_registrations_output_path / "GeneratedChannelRegistrations.ts"
     )
     if generated_registrations_file.exists():
         generated_registrations_file.unlink()
+        deleted_paths.append(generated_registrations_file)
 
-    generated_msgs = generated_messages_output_path
-    if generated_msgs.exists():
-        shutil.rmtree(generated_msgs)
-    generated_msgs.mkdir(parents=True, exist_ok=True)
+    if generated_messages_output_path.exists():
+        for generated_message_file in sorted(generated_messages_output_path.glob("*.ts")):
+            if generated_message_file.is_file():
+                generated_message_file.unlink()
+                deleted_paths.append(generated_message_file)
+
+    return deleted_paths
 
 def _scan_web_handlers(scan_paths: list[Path]) -> list[HandlerClass]:
     """扫描 TypeScript 和 JavaScript 文件中的平台 handler 注解。"""
