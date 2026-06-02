@@ -436,10 +436,10 @@ packages:
     dependency: "direct main"
     description:
       name: zh_native_channel
-      sha256: "5a9647d7a3cf0045a18c7717e7adc8f266a9384050dba54d22b61561273e4892"
+      sha256: ded2b494e71b4f725d43a1996c24b54781ba2c8d39c717aa1ffc64a8dbceafec
       url: "https://pub.dev"
     source: hosted
-    version: "0.0.1"
+    version: "0.0.3"
 sdks:
   dart: ">=3.10.0 <4.0.0"
   flutter: ">=3.3.0"

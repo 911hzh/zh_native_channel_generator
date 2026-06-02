@@ -5,7 +5,7 @@
   "packages": [
     {
       "name": "zh_native_channel_generator",
-      "version": "0.0.1",
+      "version": "0.0.3",
       "dependencies": [
         "build",
         "glob",
@@ -54,7 +54,7 @@
     },
     {
       "name": "zh_native_channel",
-      "version": "0.0.1",
+      "version": "0.0.3",
       "dependencies": [
         "flutter",
         "flutter_web_plugins"
