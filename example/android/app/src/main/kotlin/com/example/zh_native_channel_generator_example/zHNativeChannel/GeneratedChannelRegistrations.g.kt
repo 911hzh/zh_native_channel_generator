@@ -5,6 +5,7 @@ package com.example.zh_native_channel_generator_example.zHNativeChannel
 import com.example.zh_native_channel.ChannelBaseMsgRegister
 import com.example.zh_native_channel.ChannelHandlerRegister
 import com.example.zh_native_channel.MethodChannelMsgManager
+import com.example.zh_native_channel_generator_example.zHNativeChannel.msgs.NestedMsg
 import com.example.zh_native_channel_generator_example.zHNativeChannel.msgs.PingMsg
 import com.example.zh_native_channel_generator_example.zHNativeChannel.handlers.PingMsgHandler
 
@@ -15,6 +16,7 @@ object GeneratedChannelRegistrations {
     }
 
     fun registerMessages(register: ChannelBaseMsgRegister) {
+        register.registerChannel("NestedMsg") { NestedMsg.fromMap(it) }
         register.registerChannel("PingMsg") { PingMsg.fromMap(it) }
     }
 

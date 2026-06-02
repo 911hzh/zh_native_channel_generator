@@ -30,8 +30,11 @@
 - `bool`
 - `Map<String, dynamic>`
 - `List<...>`
+- 同文件内自定义 model
+- `List<Model>`
+- `Map<String, Model>`
 
-第一版暂不完整支持自定义 model 的递归嵌套生成。如果 `@ChannelMsg` 内部字段使用自定义 class，原生代码生成还需要后续扩展 Dart 解析、平台类型映射和递归序列化逻辑。
+iOS Swift 和 Android Kotlin 会把 `@ChannelMsg` 引用到的同文件 model 生成到同一个消息文件中，并支持嵌套 model、`List<Model>`、`Map<String, Model>` 和可空嵌套 model 的平台侧转换。Web 端当前仍以基础类型和结构化 `unknown` 映射为主。
 
 ## 配置文件
 

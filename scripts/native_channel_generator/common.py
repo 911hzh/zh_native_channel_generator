@@ -27,6 +27,14 @@ class DartField:
     name: str
     dart_type: str
     nullable: bool
+    default_value: str | None = None
+
+@dataclass(frozen=True)
+class DartModelClass:
+    """描述 @ChannelMsg 引用到的同文件 Dart model。"""
+
+    class_name: str
+    fields: list[DartField]
 
 @dataclass(frozen=True)
 class MessageClass:
@@ -36,6 +44,7 @@ class MessageClass:
     swift_name: str
     channel_name: str
     fields: list[DartField]
+    nested_models: list[DartModelClass]
 
 @dataclass(frozen=True)
 class HandlerClass:
@@ -474,19 +483,33 @@ def _parse_message_file(dart_file: Path) -> list[MessageClass]:
 
     source = dart_file.read_text(encoding="utf-8")
     results: list[MessageClass] = []
+    class_fields = {
+        class_name: _parse_fields(class_name, body)
+        for class_name, _, body in _iter_classes(source)
+    }
 
-    for class_name, annotations, body in _iter_annotated_classes(source):
+    for class_name, annotations, body in _iter_classes(source):
         channel_msg = _read_annotation_value(annotations, "ChannelMsg")
         if channel_msg is None:
             continue
 
         channel_name = channel_msg or class_name
+        fields = _parse_fields(class_name, body)
+        _validate_supported_field_types(class_name, fields, class_fields)
+        nested_models = _collect_nested_models(
+            class_name,
+            fields,
+            class_fields,
+        )
+        for model in nested_models:
+            _validate_supported_field_types(model.class_name, model.fields, class_fields)
         results.append(
             MessageClass(
                 class_name=class_name,
                 swift_name=class_name,
                 channel_name=channel_name,
-                fields=_parse_fields(body),
+                fields=fields,
+                nested_models=nested_models,
             )
         )
     return results
@@ -520,11 +543,11 @@ def _parse_platform_handler_file(source_file: Path) -> list[HandlerClass]:
         )
     return handlers
 
-def _iter_annotated_classes(source: str) -> list[tuple[str, str, str]]:
-    """返回带注解的 Dart 类、注解文本和类体。"""
+def _iter_classes(source: str) -> list[tuple[str, str, str]]:
+    """返回 Dart 类、注解文本和类体。"""
 
     pattern = re.compile(
-        r"(?P<annotations>(?:\s*@[^\n]+\n)+)\s*class\s+(?P<class_name>[A-Za-z_]\w*)"
+        r"(?P<annotations>(?:\s*@[^\n]+\n)*)\s*class\s+(?P<class_name>[A-Za-z_]\w*)"
         r"[^{]*\{(?P<body>.*?)\n\}",
         re.DOTALL,
     )
@@ -544,25 +567,192 @@ def _read_annotation_value(annotations: str, annotation_name: str) -> str | None
         return None
     return annotation.group("value") or ""
 
-def _parse_fields(class_body: str) -> list[DartField]:
+def _parse_fields(class_name: str, class_body: str) -> list[DartField]:
     """从 Dart 类体中提取支持的 final 字段声明。"""
 
     fields: list[DartField] = []
+    constructor_defaults = _parse_constructor_defaults(class_name, class_body)
     field_pattern = re.compile(
-        r"^\s*(?:final\s+)?(?P<type>String|int|double|num|bool|Map<String,\s*dynamic>|List<[^>]+>)"
-        r"(?P<nullable>\?)?\s+(?P<name>[A-Za-z_]\w*)\s*;",
+        r"^\s*(?:final\s+)?(?P<type>[A-Za-z_]\w*(?:<[^;]+>)?)"
+        r"(?P<nullable>\?)?\s+(?P<name>[A-Za-z_]\w*)"
+        r"(?:\s*=\s*(?P<default>[^;]+))?\s*;",
         re.MULTILINE,
     )
 
     for match in field_pattern.finditer(class_body):
+        field_name = match.group("name")
+        field_default = _normalize_default_value(match.group("default"))
         fields.append(
             DartField(
-                name=match.group("name"),
-                dart_type=match.group("type"),
+                name=field_name,
+                dart_type=_normalize_dart_type(match.group("type")),
                 nullable=match.group("nullable") == "?",
+                default_value=constructor_defaults.get(field_name, field_default),
             )
         )
     return fields
+
+def _parse_constructor_defaults(class_name: str, class_body: str) -> dict[str, str]:
+    """读取命名构造参数中的 this.field 默认值。"""
+
+    constructor_match = re.search(
+        rf"\b{re.escape(class_name)}\s*\((?P<params>.*?)\)\s*(?:;|\{{)",
+        class_body,
+        re.DOTALL,
+    )
+    if constructor_match is None:
+        return {}
+
+    defaults: dict[str, str] = {}
+    params = constructor_match.group("params")
+    param_pattern = re.compile(
+        r"(?:required\s+)?this\.(?P<name>[A-Za-z_]\w*)"
+        r"(?:\s*=\s*(?P<default>[^,\n\}]+))?",
+        re.MULTILINE,
+    )
+    for match in param_pattern.finditer(params):
+        default_value = _normalize_default_value(match.group("default"))
+        if default_value is not None:
+            defaults[match.group("name")] = default_value
+    return defaults
+
+def _normalize_default_value(value: str | None) -> str | None:
+    """标准化 Dart 默认值文本，仅保留可跨平台直接生成的字面量。"""
+
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if re.fullmatch(r"""(?:"[^"]*"|'[^']*'|-?\d+(?:\.\d+)?|true|false|null)""", normalized):
+        return normalized
+    return None
+
+def _collect_nested_models(
+    root_class_name: str,
+    fields: list[DartField],
+    class_fields: dict[str, list[DartField]],
+) -> list[DartModelClass]:
+    """收集消息字段引用到的同文件 model，并递归包含 model 依赖。"""
+
+    models: list[DartModelClass] = []
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit_type(dart_type: str) -> None:
+        model_name = _referenced_model_name(dart_type, class_fields)
+        if model_name is None or model_name == root_class_name:
+            return
+        visit_model(model_name)
+
+    def visit_model(model_name: str) -> None:
+        if model_name in visited:
+            return
+        if model_name in visiting:
+            return
+        model_fields = class_fields.get(model_name)
+        if model_fields is None:
+            return
+
+        visiting.add(model_name)
+        for field in model_fields:
+            visit_type(field.dart_type)
+        visiting.remove(model_name)
+        visited.add(model_name)
+        models.append(DartModelClass(class_name=model_name, fields=model_fields))
+
+    for field in fields:
+        visit_type(field.dart_type)
+
+    return models
+
+def _referenced_model_name(
+    dart_type: str,
+    class_fields: dict[str, list[DartField]],
+) -> str | None:
+    """如果字段类型引用了同文件 model，返回 model 类名。"""
+
+    type_name = _strip_nullable_type(dart_type)
+    if type_name in class_fields:
+        return type_name
+
+    list_inner = _generic_inner_type(type_name, "List")
+    if list_inner is not None:
+        return _referenced_model_name(list_inner, class_fields)
+
+    map_value = _map_value_type(type_name)
+    if map_value is not None:
+        return _referenced_model_name(map_value, class_fields)
+
+    return None
+
+def _validate_supported_field_types(
+    class_name: str,
+    fields: list[DartField],
+    class_fields: dict[str, list[DartField]],
+) -> None:
+    """校验字段类型可生成；自定义 model 必须在同一 Dart 文件内声明。"""
+
+    for field in fields:
+        unsupported_type = _unsupported_field_type(field.dart_type, class_fields)
+        if unsupported_type is not None:
+            raise ValueError(
+                f"Unsupported field type '{unsupported_type}' on {class_name}.{field.name}. "
+                "Custom model fields must be declared in the same Dart file as the @ChannelMsg."
+            )
+
+def _unsupported_field_type(
+    dart_type: str,
+    class_fields: dict[str, list[DartField]],
+) -> str | None:
+    """返回不支持的类型文本；支持时返回 None。"""
+
+    primitive_types = {"String", "int", "double", "num", "bool", "dynamic"}
+    type_name = _strip_nullable_type(dart_type)
+    if type_name in primitive_types or type_name in class_fields:
+        return None
+    if type_name == "Map<String, dynamic>":
+        return None
+
+    list_inner = _generic_inner_type(type_name, "List")
+    if list_inner is not None:
+        return _unsupported_field_type(list_inner, class_fields)
+
+    map_value = _map_value_type(type_name)
+    if map_value is not None:
+        return _unsupported_field_type(map_value, class_fields)
+
+    return type_name
+
+def _normalize_dart_type(dart_type: str) -> str:
+    """标准化 Dart 字段类型，方便后续平台类型映射。"""
+
+    normalized = re.sub(r"\s+", " ", dart_type.strip())
+    normalized = re.sub(r"\s*<\s*", "<", normalized)
+    normalized = re.sub(r"\s*>\s*", ">", normalized)
+    normalized = re.sub(r"\s*,\s*", ", ", normalized)
+    return normalized
+
+def _strip_nullable_type(dart_type: str) -> str:
+    """去掉类型文本末尾的 nullable 标记。"""
+
+    return dart_type[:-1] if dart_type.endswith("?") else dart_type
+
+def _generic_inner_type(dart_type: str, container: str) -> str | None:
+    """读取单参数泛型的内部类型。"""
+
+    prefix = f"{container}<"
+    if not dart_type.startswith(prefix) or not dart_type.endswith(">"):
+        return None
+    return _normalize_dart_type(dart_type[len(prefix) : -1])
+
+def _map_value_type(dart_type: str) -> str | None:
+    """读取 Map<String, T> 的 value 类型。"""
+
+    prefix = "Map<String, "
+    if not dart_type.startswith(prefix) or not dart_type.endswith(">"):
+        return None
+    return _normalize_dart_type(dart_type[len(prefix) : -1])
 
 def _write_file(path: Path, content: str) -> None:
     """创建父目录并写入 UTF-8 生成内容。"""

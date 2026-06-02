@@ -3,10 +3,12 @@
 
 import { ChannelBaseMsgRegister } from './ChannelBaseMsgRegister';
 import { ChannelHandlerRegister } from './ChannelHandlerRegister';
+import { NestedMsg } from './msgs/NestedMsg';
 import { PingMsg } from './msgs/PingMsg';
 import { PingMsgHandler } from './handlers/PingMsgHandler';
 
 export function registerGeneratedChannelMessages(register: ChannelBaseMsgRegister): void {
+  register.registerChannel('NestedMsg', (map) => NestedMsg.fromMap(map));
   register.registerChannel('PingMsg', (map) => PingMsg.fromMap(map));
 }
 
