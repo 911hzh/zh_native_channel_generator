@@ -41,51 +41,20 @@
 zh_native_channel_config.json
 ```
 
-示例：
+最低成本示例：
 
 ```json
 {
-  "dart": {
-    "defaultOutputDirectory": "lib/base/zHNativeChannel",
-    "messageScanPath": [
-      "lib/base/zHNativeChannel/msgs"
-    ],
-    "handlerScanPath": [
-      "lib/base/zHNativeChannel/handlers"
-    ],
-    "generatedChannelRegisterOutputPath": "lib/base/zHNativeChannel/ChannelGeneratedRegister.g.dart"
-  },
+  "dart": {},
   "platforms": {
-    "ios": {
-      "defaultOutputDirectory": "ios/Runner/zHNativeChannel",
-      "scanHandlerPath": [
-        "ios/Runner/zHNativeChannel/handler_ios"
-      ],
-      "msgsOutputPath": "ios/Runner/zHNativeChannel/msgs",
-      "generatedChannelRegistrationsOutputPath": "ios/Runner/zHNativeChannel",
-      "xcodeProjectPath": "ios/Runner.xcodeproj/project.pbxproj"
-    },
-    "android": {
-      "defaultOutputDirectory": "android/app/src/main/kotlin/com/example/app/zHNativeChannel",
-      "scanHandlerPath": [
-        "android/app/src/main/kotlin/com/example/app/zHNativeChannel/handlers"
-      ],
-      "msgsOutputPath": "android/app/src/main/kotlin/com/example/app/zHNativeChannel/msgs",
-      "generatedChannelRegistrationsOutputPath": "android/app/src/main/kotlin/com/example/app/zHNativeChannel",
-      "packageName": "com.example.app.zHNativeChannel"
-    },
-    "web": {
-      "defaultOutputDirectory": "web/zHNativeChannel",
-      "scanHandlerPath": [
-        "web/zHNativeChannel/handlers"
-      ],
-      "msgsOutputPath": "web/zHNativeChannel/msgs",
-      "generatedChannelRegistrationsOutputPath": "web/zHNativeChannel",
-      "globalName": "ZHNativeChannel"
-    }
+    "ios": {},
+    "android": {},
+    "web": {}
   }
 }
 ```
+
+上面的配置会使用默认扫描目录和输出目录。需要自定义目录、Android package、iOS Xcode 工程路径或 Web 全局对象名时，再补充对应字段。
 
 说明：
 

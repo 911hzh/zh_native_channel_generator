@@ -1,6 +1,6 @@
 name: zh_native_channel_generator
 description: "Code generator for zh_native_channel."
-version: 0.0.3
+version: 0.0.5
 repository: https://github.com/hzh137940556/zh_native_channel_generator
 
 environment:
