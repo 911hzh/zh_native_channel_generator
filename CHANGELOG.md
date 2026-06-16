@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.0.7
+
+- 更新 package 版本号到 `0.0.7`。
+- 更新仓库地址为 `https://github.com/911hzh/zh_native_channel_generator`。
+- README 补充当前仓库地址说明。
+
 ## 0.0.6
 
 - 支持 `@ChannelMsg` 字段引用同文件内的自定义嵌套 model。
