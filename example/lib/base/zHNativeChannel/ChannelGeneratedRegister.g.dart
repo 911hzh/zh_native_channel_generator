@@ -5,6 +5,7 @@
 // ************************************************************************
 
 import 'package:zh_native_channel/zh_native_channel.dart';
+import 'package:zh_native_channel_generator_example/base/zHNativeChannel/msgs/nested_msg.dart';
 import 'package:zh_native_channel_generator_example/base/zHNativeChannel/msgs/ping_msg.dart';
 
 void initializeGeneratedChannels() {
@@ -26,7 +27,9 @@ void registerGeneratedChannels({
 }
 
 void registerGeneratedChannelMessages(ChannelBaseMsgRegister register) {
+  register.registerChannel('NestedMsg', NestedMsg.fromMap);
   register.registerChannel('PingMsg', PingMsg.fromMap);
 }
 
-void registerGeneratedChannelHandlers(ChannelHandlerRegister register) {}
+void registerGeneratedChannelHandlers(ChannelHandlerRegister register) {
+}

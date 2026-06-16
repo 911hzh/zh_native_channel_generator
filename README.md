@@ -2,6 +2,10 @@
 
 `zh_native_channel_generator` 是配合 `zh_native_channel` 使用的代码生成包，用来减少 Flutter 和原生平台之间 MethodChannel 通信时的重复注册、消息解析和平台胶水代码。
 
+仓库地址：[https://github.com/911hzh/zh_native_channel_generator](https://github.com/911hzh/zh_native_channel_generator)
+
+欢迎大家提交 PR，一起完善文档、示例和代码生成能力。
+
 它当前包含两部分生成能力：
 
 - Dart 侧通过 `build_runner` 扫描 `@ChannelMsg` 和 `@ChannelHandlerFor`，生成 Dart 消息注册代码和 `ZHNativeChannelManager`。
@@ -30,8 +34,11 @@
 - `bool`
 - `Map<String, dynamic>`
 - `List<...>`
+- 同文件内自定义 model
+- `List<Model>`
+- `Map<String, Model>`
 
-第一版暂不完整支持自定义 model 的递归嵌套生成。如果 `@ChannelMsg` 内部字段使用自定义 class，原生代码生成还需要后续扩展 Dart 解析、平台类型映射和递归序列化逻辑。
+iOS Swift 和 Android Kotlin 会把 `@ChannelMsg` 引用到的同文件 model 生成到同一个消息文件中，并支持嵌套 model、`List<Model>`、`Map<String, Model>` 和可空嵌套 model 的平台侧转换。Web 端当前仍以基础类型和结构化 `unknown` 映射为主。
 
 ## 配置文件
 

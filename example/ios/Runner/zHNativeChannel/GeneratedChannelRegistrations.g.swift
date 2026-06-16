@@ -11,6 +11,7 @@ enum GeneratedChannelRegistrations {
     }
 
     static func registerMessages(_ register: ChannelBaseMsgRegister) {
+        register.registerChannel("NestedMsg") { try NestedMsg(map: $0) }
         register.registerChannel("PingMsg") { try PingMsg(map: $0) }
     }
 

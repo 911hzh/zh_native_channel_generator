@@ -6,9 +6,13 @@ from pathlib import Path
 from .common import (
     AndroidGeneratorConfig,
     DartField,
+    DartModelClass,
     HandlerClass,
     MessageClass,
+    _generic_inner_type,
+    _map_value_type,
     _parse_platform_handler_file,
+    _strip_nullable_type,
     _write_file,
     log_step,
 )
@@ -276,29 +280,68 @@ def _android_header(package_name: str) -> list[str]:
 def _android_message_kotlin(package_name: str, message: MessageClass) -> str:
     """为单个 Dart 消息渲染 Kotlin ChannelBaseMsg 实现。"""
 
+    model_names = {model.class_name for model in message.nested_models}
     lines = _android_header(f"{package_name}.msgs") + [
         "",
         "import com.example.zh_native_channel.ChannelBaseMsg",
         "import com.example.zh_native_channel.ChannelMsgException",
-        "",
-        f"data class {message.class_name}(",
     ]
+    if _needs_kotlin_map_helper(message):
+        lines.append("import com.example.zh_native_channel.ChannelMsgMapCoder")
+    lines.append("")
 
-    for index, field in enumerate(message.fields):
-        suffix = "," if index < len(message.fields) - 1 else ""
-        lines.append(f"    val {field.name}: {_kotlin_type(field)}{suffix}")
+    for model in message.nested_models:
+        lines.extend(
+            _kotlin_data_class(
+                model.class_name,
+                model.fields,
+                model_names,
+                implements_channel_base_msg=False,
+            )
+        )
+        lines.append("")
+
+    lines.extend(
+        _kotlin_data_class(
+            message.class_name,
+            message.fields,
+            model_names,
+            implements_channel_base_msg=True,
+        )
+    )
+
+    return "\n".join(lines) + "\n"
+
+def _kotlin_data_class(
+    class_name: str,
+    fields: list[DartField],
+    model_names: set[str],
+    *,
+    implements_channel_base_msg: bool,
+) -> list[str]:
+    """渲染 Kotlin data class，可用于消息或同文件嵌套 model。"""
+
+    lines = [f"data class {class_name}("]
+    for index, field in enumerate(fields):
+        suffix = "," if index < len(fields) - 1 else ""
+        lines.append(f"    val {field.name}: {_kotlin_type(field, model_names)}{suffix}")
+
+    inheritance = " : ChannelBaseMsg" if implements_channel_base_msg else ""
+    to_map_override = "override " if implements_channel_base_msg else ""
 
     lines.extend(
         [
-            ") : ChannelBaseMsg {",
-            "    override fun toMap(): Map<String, Any?> {",
+            f"){inheritance} {{",
+            f"    {to_map_override}fun toMap(): Map<String, Any?> {{",
             "        return mapOf(",
         ]
     )
 
-    for index, field in enumerate(message.fields):
-        suffix = "," if index < len(message.fields) - 1 else ""
-        lines.append(f'            "{field.name}" to {field.name}{suffix}')
+    for index, field in enumerate(fields):
+        suffix = "," if index < len(fields) - 1 else ""
+        lines.append(
+            f'            "{field.name}" to {_kotlin_to_map_value(field, model_names)}{suffix}'
+        )
 
     lines.extend(
         [
@@ -306,20 +349,28 @@ def _android_message_kotlin(package_name: str, message: MessageClass) -> str:
             "    }",
             "",
             "    companion object {",
-            f"        fun fromMap(map: Map<String, Any?>): {message.class_name} {{",
-            f"            return {message.class_name}(",
+            f"        fun fromMap(map: Map<String, Any?>): {class_name} {{",
+            f"            return {class_name}(",
         ]
     )
 
-    for index, field in enumerate(message.fields):
-        suffix = "," if index < len(message.fields) - 1 else ""
-        lines.append(f"                {field.name} = {_kotlin_value_reader(field)}{suffix}")
+    for index, field in enumerate(fields):
+        suffix = "," if index < len(fields) - 1 else ""
+        lines.append(
+            f"                {field.name} = {_kotlin_value_reader(field, model_names)}{suffix}"
+        )
 
     lines.extend(["            )", "        }", "    }", "}"])
-    return "\n".join(lines) + "\n"
+    return lines
 
-def _kotlin_type(field: DartField) -> str:
+def _kotlin_type(field: DartField, model_names: set[str]) -> str:
     """将支持的 Dart 字段类型映射为 Kotlin 类型。"""
+
+    kotlin_type = _kotlin_type_name(field.dart_type, model_names)
+    return f"{kotlin_type}?" if field.nullable else kotlin_type
+
+def _kotlin_type_name(dart_type: str, model_names: set[str]) -> str:
+    """将 Dart 类型文本映射为 Kotlin 类型文本。"""
 
     type_map = {
         "String": "String",
@@ -328,29 +379,204 @@ def _kotlin_type(field: DartField) -> str:
         "num": "Double",
         "bool": "Boolean",
         "Map<String, dynamic>": "Map<String, Any?>",
+        "dynamic": "Any?",
     }
-    if field.dart_type.startswith("List<"):
-        kotlin_type = "List<Any?>"
-    else:
-        kotlin_type = type_map.get(field.dart_type, "Any")
-    return f"{kotlin_type}?" if field.nullable else kotlin_type
 
-def _kotlin_value_reader(field: DartField) -> str:
+    normalized_type = _strip_nullable_type(dart_type)
+    if normalized_type in type_map:
+        return type_map[normalized_type]
+    if normalized_type in model_names:
+        return normalized_type
+
+    list_inner = _generic_inner_type(normalized_type, "List")
+    if list_inner is not None:
+        return f"List<{_kotlin_type_name(list_inner, model_names)}>"
+
+    map_value = _map_value_type(normalized_type)
+    if map_value is not None:
+        return f"Map<String, {_kotlin_type_name(map_value, model_names)}>"
+
+    return normalized_type
+
+def _kotlin_value_reader(field: DartField, model_names: set[str]) -> str:
     """渲染从 map 读取并校验单个字段的 Kotlin 代码。"""
 
     value = f'map["{field.name}"]'
+    non_null_reader = _kotlin_non_null_value_reader(field, model_names, value)
     if field.nullable:
-        if field.dart_type == "int":
-            return f"({value} as? Number)?.toInt()"
-        if field.dart_type in ("double", "num"):
-            return f"({value} as? Number)?.toDouble()"
-        return f"{value} as? {_kotlin_type(field).rstrip('?')}"
+        return _kotlin_nullable_value_reader(field, model_names, value)
 
+    return non_null_reader
+
+def _kotlin_non_null_value_reader(
+    field: DartField,
+    model_names: set[str],
+    value: str,
+) -> str:
+    """渲染非空字段读取表达式。"""
+
+    normalized_type = _strip_nullable_type(field.dart_type)
     error = (
         f'ChannelMsgException("Field {field.name} is missing or has invalid type.")'
     )
-    if field.dart_type == "int":
-        return f"({value} as? Number)?.toInt() ?: throw {error}"
-    if field.dart_type in ("double", "num"):
-        return f"({value} as? Number)?.toDouble() ?: throw {error}"
-    return f"{value} as? {_kotlin_type(field)} ?: throw {error}"
+    fallback = _kotlin_default_value(field)
+    fallback_or_error = fallback if fallback is not None else f"throw {error}"
+    if normalized_type == "int":
+        return f"({value} as? Number)?.toInt() ?: {fallback_or_error}"
+    if normalized_type in ("double", "num"):
+        return f"({value} as? Number)?.toDouble() ?: {fallback_or_error}"
+    if normalized_type in model_names:
+        return f"{normalized_type}.fromMap(ChannelMsgMapCoder.requireStringAnyMap({value}, \"{field.name}\"))"
+
+    list_inner = _generic_inner_type(normalized_type, "List")
+    if list_inner is not None:
+        return _kotlin_list_reader(field, model_names, value, nullable=False)
+
+    map_value = _map_value_type(normalized_type)
+    if map_value is not None:
+        return _kotlin_map_reader(field, model_names, value, nullable=False)
+
+    return f"{value} as? {_kotlin_type(field, model_names)} ?: {fallback_or_error}"
+
+def _kotlin_nullable_value_reader(
+    field: DartField,
+    model_names: set[str],
+    value: str,
+) -> str:
+    """渲染可空字段读取表达式。"""
+
+    normalized_type = _strip_nullable_type(field.dart_type)
+    if normalized_type == "int":
+        return f"({value} as? Number)?.toInt()"
+    if normalized_type in ("double", "num"):
+        return f"({value} as? Number)?.toDouble()"
+    if normalized_type in model_names:
+        return f"{value}?.let {{ {normalized_type}.fromMap(ChannelMsgMapCoder.requireStringAnyMap(it, \"{field.name}\")) }}"
+
+    list_inner = _generic_inner_type(normalized_type, "List")
+    if list_inner is not None:
+        return _kotlin_list_reader(field, model_names, value, nullable=True)
+
+    map_value = _map_value_type(normalized_type)
+    if map_value is not None:
+        return _kotlin_map_reader(field, model_names, value, nullable=True)
+
+    return f"{value} as? {_kotlin_type(field, model_names).rstrip('?')}"
+
+def _kotlin_list_reader(
+    field: DartField,
+    model_names: set[str],
+    value: str,
+    *,
+    nullable: bool,
+) -> str:
+    """渲染 List 字段读取表达式。"""
+
+    normalized_type = _strip_nullable_type(field.dart_type)
+    list_inner = _generic_inner_type(normalized_type, "List")
+    error = (
+        f'ChannelMsgException("Field {field.name} is missing or has invalid type.")'
+    )
+    if list_inner is None:
+        return f"{value} as? {_kotlin_type(field, model_names)}"
+
+    list_value = f"({value} as? List<*>)"
+    if list_inner in model_names:
+        expression = (
+            f"{list_value}?.map {{ item -> "
+            f"{list_inner}.fromMap(ChannelMsgMapCoder.requireStringAnyMap(item, \"{field.name}\")) }}"
+        )
+    else:
+        expression = f"{value} as? {_kotlin_type(field, model_names).rstrip('?')}"
+    return expression if nullable else f"{expression} ?: throw {error}"
+
+def _kotlin_map_reader(
+    field: DartField,
+    model_names: set[str],
+    value: str,
+    *,
+    nullable: bool,
+) -> str:
+    """渲染 Map<String, T> 字段读取表达式。"""
+
+    normalized_type = _strip_nullable_type(field.dart_type)
+    map_value = _map_value_type(normalized_type)
+    error = (
+        f'ChannelMsgException("Field {field.name} is missing or has invalid type.")'
+    )
+    if map_value in model_names:
+        expression = (
+            f"({value} as? Map<*, *>)?.map {{ entry -> "
+            f"val key = entry.key as? String ?: throw {error}; "
+            f"key to {map_value}.fromMap(ChannelMsgMapCoder.requireStringAnyMap(entry.value, \"{field.name}\")) "
+            "}?.toMap()"
+        )
+    else:
+        expression = f"{value} as? {_kotlin_type(field, model_names).rstrip('?')}"
+    return expression if nullable else f"{expression} ?: throw {error}"
+
+def _kotlin_to_map_value(field: DartField, model_names: set[str]) -> str:
+    """渲染字段写入 Map 时的表达式。"""
+
+    normalized_type = _strip_nullable_type(field.dart_type)
+    value = field.name
+    if normalized_type in model_names:
+        return f"{value}?.toMap()" if field.nullable else f"{value}.toMap()"
+
+    list_inner = _generic_inner_type(normalized_type, "List")
+    if list_inner in model_names:
+        return (
+            f"{value}?.map {{ it.toMap() }}" if field.nullable else f"{value}.map {{ it.toMap() }}"
+        )
+
+    map_value = _map_value_type(normalized_type)
+    if map_value in model_names:
+        return (
+            f"{value}?.mapValues {{ it.value.toMap() }}"
+            if field.nullable
+            else f"{value}.mapValues {{ it.value.toMap() }}"
+        )
+
+    return value
+
+def _needs_kotlin_map_helper(message: MessageClass) -> bool:
+    """判断当前消息文件是否需要嵌套 Map 读取辅助函数。"""
+
+    if not message.nested_models:
+        return False
+    model_names = {model.class_name for model in message.nested_models}
+    all_fields = [*message.fields]
+    for model in message.nested_models:
+        all_fields.extend(model.fields)
+    return any(_field_references_model(field, model_names) for field in all_fields)
+
+def _field_references_model(field: DartField, model_names: set[str]) -> bool:
+    """判断字段是否引用了同文件 model。"""
+
+    normalized_type = _strip_nullable_type(field.dart_type)
+    if normalized_type in model_names:
+        return True
+    list_inner = _generic_inner_type(normalized_type, "List")
+    if list_inner in model_names:
+        return True
+    map_value = _map_value_type(normalized_type)
+    return map_value in model_names
+
+def _kotlin_default_value(field: DartField) -> str | None:
+    """将 Dart 字段默认值映射为 Kotlin 字面量。"""
+
+    if field.default_value is None:
+        return None
+    value = field.default_value
+    if value == "null":
+        return "null" if field.nullable else None
+    if value in ("true", "false"):
+        return value
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", value):
+        return value
+    if (value.startswith('"') and value.endswith('"')) or (
+        value.startswith("'") and value.endswith("'")
+    ):
+        escaped = value[1:-1].replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return None

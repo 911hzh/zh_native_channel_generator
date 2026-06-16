@@ -406,13 +406,13 @@ packages:
       path: "../../zh_native_channel"
       relative: true
     source: path
-    version: "0.0.1"
+    version: "0.0.6"
   zh_native_channel_generator:
     dependency: "direct dev"
     description:
       path: ".."
       relative: true
     source: path
-    version: "0.0.1"
+    version: "0.0.6"
 sdks:
   dart: ">=3.10.0 <4.0.0"

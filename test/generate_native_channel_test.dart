@@ -60,12 +60,19 @@ void main() {
     final iosMessage = File(
       '${sandbox.path}/ios/Runner/zHNativeChannel/msgs/PingMsg.g.swift',
     );
+    final iosNestedMessage = File(
+      '${sandbox.path}/ios/Runner/zHNativeChannel/msgs/NestedMsg.g.swift',
+    );
     final iosRegister = File(
       '${sandbox.path}/ios/Runner/zHNativeChannel/GeneratedChannelRegistrations.g.swift',
     );
     final androidMessage = File(
       '${sandbox.path}/android/app/src/main/kotlin/com/example/'
       'zh_native_channel_generator_example/zHNativeChannel/msgs/PingMsg.g.kt',
+    );
+    final androidNestedMessage = File(
+      '${sandbox.path}/android/app/src/main/kotlin/com/example/'
+      'zh_native_channel_generator_example/zHNativeChannel/msgs/NestedMsg.g.kt',
     );
     final androidRegister = File(
       '${sandbox.path}/android/app/src/main/kotlin/com/example/'
@@ -79,12 +86,81 @@ void main() {
     );
 
     final iosMessageSource = iosMessage.readAsStringSync();
+    final iosNestedMessageSource = iosNestedMessage.readAsStringSync();
     final androidMessageSource = androidMessage.readAsStringSync();
+    final androidNestedMessageSource = androidNestedMessage.readAsStringSync();
     expect(iosMessageSource, contains('struct PingMsg'));
     expect(iosMessageSource, isNot(contains('channelName')));
+    expect(iosMessageSource, isNot(contains('private func _readInt')));
+    expect(
+      File(
+        '${sandbox.path}/ios/Runner/zHNativeChannel/ChannelMsgMapCoder.g.swift',
+      ).existsSync(),
+      isFalse,
+    );
+    expect(iosNestedMessageSource, contains('struct NestedAddress: Codable'));
+    expect(iosNestedMessageSource, contains('struct NestedUser: Codable'));
+    expect(iosNestedMessageSource, contains('struct NestedMeta: Codable'));
+    expect(
+      iosNestedMessageSource,
+      contains('struct NestedMsg: Codable, ChannelBaseMsg'),
+    );
+    expect(iosNestedMessageSource, contains('let title: String'));
+    expect(iosNestedMessageSource, contains('let user: NestedUser'));
+    expect(
+      iosNestedMessageSource,
+      contains('self.title = (map["title"] as? String) ?? "guest"'),
+    );
+    expect(
+      iosNestedMessageSource,
+      contains('self.age = ChannelMsgMapCoder.readInt(map["age"]) ?? 18'),
+    );
+    expect(
+      iosNestedMessageSource,
+      contains('self.city = (map["city"] as? String) ?? ""'),
+    );
+    expect(iosNestedMessageSource, contains('let users: [NestedUser]'));
+    expect(
+      iosNestedMessageSource,
+      contains('let userMap: [String: NestedUser]'),
+    );
+    expect(iosNestedMessageSource, contains('let meta: NestedMeta?'));
     expect(iosRegister.readAsStringSync(), contains('PingMsgHandler()'));
     expect(androidMessageSource, contains('data class PingMsg'));
     expect(androidMessageSource, isNot(contains('channelName')));
+    expect(androidNestedMessageSource, contains('data class NestedAddress'));
+    expect(androidNestedMessageSource, contains('data class NestedUser'));
+    expect(androidNestedMessageSource, contains('data class NestedMeta'));
+    expect(androidNestedMessageSource, contains('data class NestedMsg'));
+    expect(androidNestedMessageSource, contains('val title: String'));
+    expect(androidNestedMessageSource, contains('val user: NestedUser'));
+    expect(
+      androidNestedMessageSource,
+      contains('title = map["title"] as? String ?: "guest"'),
+    );
+    expect(
+      androidNestedMessageSource,
+      contains('age = (map["age"] as? Number)?.toInt() ?: 18'),
+    );
+    expect(
+      androidNestedMessageSource,
+      contains('city = map["city"] as? String ?: ""'),
+    );
+    expect(androidNestedMessageSource, contains('val users: List<NestedUser>'));
+    expect(
+      androidNestedMessageSource,
+      contains('val userMap: Map<String, NestedUser>'),
+    );
+    expect(androidNestedMessageSource, contains('val meta: NestedMeta?'));
+    expect(androidNestedMessageSource, contains('"user" to user.toMap()'));
+    expect(
+      androidNestedMessageSource,
+      contains('NestedUser.fromMap(ChannelMsgMapCoder.requireStringAnyMap'),
+    );
+    expect(
+      androidNestedMessageSource,
+      isNot(contains('private fun _requireStringAnyMap')),
+    );
     expect(androidRegister.readAsStringSync(), contains('PingMsgHandler()'));
     expect(webMessage.readAsStringSync(), contains('export class PingMsg'));
     expect(webRegister.readAsStringSync(), contains('new PingMsgHandler()'));
